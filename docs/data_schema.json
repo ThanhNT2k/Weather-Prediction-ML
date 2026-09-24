@@ -1,0 +1,322 @@
+{
+  "version": "1.0",
+  "default_horizon_hours": 1,
+  "time_standard": "UTC+07:00",
+  "fields": [
+    {
+      "name": "record_id",
+      "dtype": "string",
+      "role": "identifier",
+      "unit": "-",
+      "description": "UUID5 của điểm lấy dữ liệu và thời điểm UTC; giữ nguyên từ cleaned.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "station_id",
+      "dtype": "string",
+      "role": "identifier",
+      "unit": "-",
+      "description": "Định danh điểm NASA POWER Hà Nội.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "timestamp",
+      "dtype": "string",
+      "role": "time",
+      "unit": "-",
+      "description": "Thời điểm dự báo t, ISO 8601 với +07:00.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "city",
+      "dtype": "string",
+      "role": "identifier",
+      "unit": "-",
+      "description": "Tên thành phố: Hanoi.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "latitude",
+      "dtype": "float",
+      "role": "location",
+      "unit": "degree",
+      "description": "Tọa độ điểm lấy dữ liệu; không đưa vào feature mặc định vì chỉ có một điểm Hà Nội.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "longitude",
+      "dtype": "float",
+      "role": "location",
+      "unit": "degree",
+      "description": "Tọa độ điểm lấy dữ liệu; không đưa vào feature mặc định vì chỉ có một điểm Hà Nội.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "T2M",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "°C",
+      "description": "Nhiệt độ tại t.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "PRECTOTCORR",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "mm/hour",
+      "description": "Lượng mưa theo giờ tại t.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "RH2M",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "%",
+      "description": "Độ ẩm tương đối tại t.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "PS",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "kPa",
+      "description": "Áp suất bề mặt tại t.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "WS2M",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "m/s",
+      "description": "Tốc độ gió 2 m tại t.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "WD2M",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "degree",
+      "description": "Hướng gió 2 m tại t, [0,360).",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "ALLSKY_SFC_SW_DWN",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "Wh/m²",
+      "description": "Bức xạ sóng ngắn tại t.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "is_imputed",
+      "dtype": "int",
+      "role": "provenance",
+      "unit": "-",
+      "description": "1 nếu dòng có ô được điền, ngược lại 0.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "imputed_columns",
+      "dtype": "string",
+      "role": "provenance",
+      "unit": "-",
+      "description": "Danh sách biến được điền, phân cách bằng dấu |; none nếu không có.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "is_inserted_hour",
+      "dtype": "int",
+      "role": "provenance",
+      "unit": "-",
+      "description": "1 nếu giờ được bổ sung, ngược lại 0.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "source_row_numbers",
+      "dtype": "string",
+      "role": "provenance",
+      "unit": "-",
+      "description": "Số thứ tự bản ghi nguồn, phân cách bằng dấu |; không tính dòng trắng/header.",
+      "stage": "cleaned",
+      "nullable": false
+    },
+    {
+      "name": "hour",
+      "dtype": "int",
+      "role": "feature",
+      "unit": "hour",
+      "description": "Giờ GMT+7 tại t, 0–23.",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "month",
+      "dtype": "int",
+      "role": "feature",
+      "unit": "month",
+      "description": "Tháng GMT+7 tại t, 1–12.",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "dayofweek",
+      "dtype": "int",
+      "role": "feature",
+      "unit": "-",
+      "description": "Thứ theo giờ GMT+7: thứ Hai=0, Chủ nhật=6.",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "season",
+      "dtype": "int",
+      "role": "feature",
+      "unit": "-",
+      "description": "Quy ước mùa cho Hà Nội: 0=đông (12–2), 1=xuân (3–5), 2=hạ (6–8), 3=thu (9–11); là quy ước lịch.",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "T2M_lag_1h",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "°C",
+      "description": "T2M(t−1 giờ).",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "T2M_lag_24h",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "°C",
+      "description": "T2M(t−24 giờ).",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "PRECTOTCORR_lag_1h",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "mm/hour",
+      "description": "PRECTOTCORR(t−1 giờ).",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "PRECTOTCORR_lag_24h",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "mm/hour",
+      "description": "PRECTOTCORR(t−24 giờ).",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "PS_diff_3h",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "kPa",
+      "description": "PS(t) − PS(t−3 giờ); âm khi áp suất giảm.",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "T2M_rolling_mean_3h",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "°C",
+      "description": "Trung bình T2M từ t−2 đến t, đủ 3 giờ, gồm giờ hiện tại.",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "T2M_rolling_mean_24h",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "°C",
+      "description": "Trung bình T2M từ t−23 đến t, đủ 24 giờ, gồm giờ hiện tại.",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "PRECTOTCORR_rolling_sum_24h",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "mm",
+      "description": "Tổng 24 giá trị mưa theo giờ từ t−23 đến t; mỗi khoảng kéo dài 1 giờ.",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "WD2M_sin",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "-",
+      "description": "sin(WD2M(t) × π/180).",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "WD2M_cos",
+      "dtype": "float",
+      "role": "feature",
+      "unit": "-",
+      "description": "cos(WD2M(t) × π/180).",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "target_timestamp",
+      "dtype": "string",
+      "role": "target_time",
+      "unit": "-",
+      "description": "Thời điểm nhãn t+h giờ, GMT+7; h lấy từ metadata horizon_hours, mặc định 1.",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "target_temperature",
+      "dtype": "float",
+      "role": "target",
+      "unit": "°C",
+      "description": "T2M tại t+h, nhãn hồi quy nhiệt độ.",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "target_rainfall",
+      "dtype": "float",
+      "role": "target",
+      "unit": "mm/hour",
+      "description": "PRECTOTCORR tại t+h, nhãn hồi quy lượng mưa theo giờ; không phải tổng mưa trong h giờ.",
+      "stage": "processed",
+      "nullable": false
+    },
+    {
+      "name": "rain_flag",
+      "dtype": "int",
+      "role": "target",
+      "unit": "-",
+      "description": "1 nếu target_rainfall > 0.1 mm/hour, ngược lại 0. Là nhãn tương lai, không đưa vào X.",
+      "stage": "processed",
+      "nullable": false
+    }
+  ]
+}
