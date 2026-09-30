@@ -3,3 +3,9 @@ models/
 __pycache__/
 .ipynb_checkpoints/
 outputs/logs/
+
+# Python
+venv/
+.venv/
+
+reports/
