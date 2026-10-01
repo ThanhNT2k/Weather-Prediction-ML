@@ -221,8 +221,8 @@ def _collect(start, end, output_dir, timeout, retries, refresh, audit):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--start", type=date.fromisoformat, default=date(2023, 1, 1))
-    parser.add_argument("--end", type=date.fromisoformat, default=date(2024, 12, 31))
+    parser.add_argument("--start", type=date.fromisoformat, default=date(2001, 1, 1))
+    parser.add_argument("--end", type=date.fromisoformat, default=date(2025, 12, 31))
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--timeout", type=float, default=90)
     parser.add_argument("--retries", type=int, default=3)

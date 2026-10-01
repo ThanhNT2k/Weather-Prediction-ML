@@ -8,6 +8,8 @@ import io
 import json
 import math
 from pathlib import Path
+import pandas as pd
+import pvlib
 
 from src.data_audit import DataAudit, DEFAULT_LOG_DIR, file_info
 from src.data_collection.nasa_power import PARAMETERS
@@ -24,9 +26,12 @@ DERIVED_FEATURES = ["hour", "month", "dayofweek", "season", "T2M_lag_1h", "T2M_l
                     "WD2M_sin", "WD2M_cos"]
 TARGETS = ["target_temperature", "target_rainfall", "rain_flag"]
 
+# Tọa độ Hà Nội, Việt Nam dùng cho pvlib
+LATITUDE, LONGITUDE = 21.0278, 105.8342
+
 
 def build_features(input_path=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT, horizon=1,
-                   min_rows=10000, log_dir=DEFAULT_LOG_DIR):
+                    min_rows=10000, log_dir=DEFAULT_LOG_DIR):
     with DataAudit("features", {"input": str(input_path), "output_dir": str(output_dir),
                                "horizon_hours": horizon, "lookback_hours": LOOKBACK,
                                "min_rows": min_rows, "version": VERSION}, __file__, log_dir) as audit:
@@ -48,11 +53,20 @@ def build_features(input_path=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT, horizon=
         expected_cleaned = [field["name"] for field in schema["fields"] if field["stage"] == "cleaned"]
         if fields != expected_cleaned:
             raise ValueError("Cleaned CSV columns do not match docs/data_schema.json")
+        
         rows = list(reader)
+        
+        # 1. Tính toán trước mảng xác định thời điểm ban đêm bằng pvlib cho toàn bộ timestamps
+        timestamps_list = [datetime.fromisoformat(row["timestamp"]) for row in rows]
+        tz_times = pd.DatetimeIndex(timestamps_list).tz_localize("Asia/Ho_Chi_Minh")
+        solar_position = pvlib.solarposition.get_solarposition(tz_times, LATITUDE, LONGITUDE)
+        # Góc thiên đỉnh > 90 độ đồng nghĩa mặt trời đã lặn dưới đường chân trời (ban đêm)
+        is_night_array = solar_position["apparent_zenith"] > 90
+
         times, values = [], []
         ids = set()
-        for row in rows:
-            stamp = datetime.fromisoformat(row["timestamp"])
+        for i, row in enumerate(rows):
+            stamp = timestamps_list[i]
             if stamp.utcoffset() != timedelta(hours=7) or stamp.minute or stamp.second or stamp.microsecond:
                 raise ValueError("Cleaned timestamps must be exact hours in GMT+7")
             if times and stamp - times[-1] != timedelta(hours=1):
@@ -67,11 +81,18 @@ def build_features(input_path=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT, horizon=
                     raise ValueError(f"Invalid quality flag {key}")
             if (row["is_imputed"] == "0") != (row["imputed_columns"] == "none"):
                 raise ValueError("Inconsistent imputed_columns flag")
+            
             observation = {key: numeric_value(row[key], key, {-999.0}) for key in PARAMETERS}
+            
+            # 2. Tự động ép bức xạ mặt trời về 0 nếu xác định là ban đêm
+            if is_night_array[i] and "ALLSKY_SFC_SW_DWN" in observation:
+                observation["ALLSKY_SFC_SW_DWN"] = 0.0
+
             if any(value is None for value in observation.values()):
                 raise ValueError("Cleaned data contains invalid meteorological values")
             times.append(stamp)
             values.append(observation)
+
         if len(rows) <= LOOKBACK + horizon:
             raise ValueError("Not enough observations for lookback and horizon")
         rejected_quality = 0
@@ -98,27 +119,33 @@ def build_features(input_path=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT, horizon=
                 "WD2M_cos": math.cos(math.radians(current["WD2M"])),
             }
             output.append({**rows[index], **derived, "target_timestamp": times[future].isoformat(),
-                           "target_temperature": values[future]["T2M"],
-                           "target_rainfall": values[future]["PRECTOTCORR"],
-                           "rain_flag": int(values[future]["PRECTOTCORR"] > 0.1)})
+                            "target_temperature": values[future]["T2M"],
+                            "target_rainfall": values[future]["PRECTOTCORR"],
+                            "rain_flag": int(values[future]["PRECTOTCORR"] > 0.1)})
+        
         audit.event("TRANSFORMED", "Tạo đặc trưng từ dữ liệu đến t và nhãn tại t+h; loại mẫu không đủ điều kiện",
                     input_rows=len(rows), warmup_rows=LOOKBACK, missing_future_rows=horizon,
                     rejected_imputed_windows_or_targets=rejected_quality, output_rows=len(output),
                     horizon_hours=horizon, feature_columns=[*PARAMETERS, *DERIVED_FEATURES],
                     target_columns=TARGETS, rain_threshold_mm_per_hour=0.1)
+        
         if len(output) < min_rows:
             raise ValueError(f"Only {len(output)} valid feature rows; minimum is {min_rows}")
+        
         output_fields = fields + DERIVED_FEATURES + ["target_timestamp", *TARGETS]
         if output_fields != [field["name"] for field in schema["fields"]]:
             raise ValueError("Output columns do not match data schema")
+        
         stream = io.StringIO(newline="")
         writer = csv.DictWriter(stream, fieldnames=output_fields)
         writer.writeheader()
         writer.writerows(output)
         content = stream.getvalue()
         csv_path = output_dir / f"{input_path.stem.removesuffix('_clean')}_features_{horizon}h.csv"
+        
         if csv_path.resolve() == input_path:
             raise ValueError("Cannot overwrite input")
+        
         report = {
             "dataset_id": "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest(),
             "feature_version": VERSION, "schema_version": schema["version"],
@@ -134,6 +161,7 @@ def build_features(input_path=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT, horizon=
             "assumption": "All observations through t are available; historical backtesting, not real-time NASA availability.",
             "split_rule": "Split by time; require train target_timestamp < validation start and validation target_timestamp < test start. Never random split.",
         }
+        
         output_dir.mkdir(parents=True, exist_ok=True)
         for path, text in ((csv_path, content), (csv_path.with_suffix(".metadata.json"), json.dumps(report, ensure_ascii=False, indent=2))):
             audit.event("WRITE_PLANNED", "Chuẩn bị ghi dữ liệu đặc trưng hoặc metadata", previous_output=file_info(path))
