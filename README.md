@@ -20,7 +20,7 @@ Mô hình cốt lõi sử dụng các thuật toán Học máy tập hợp tối
 ### Phạm vi triển khai giai đoạn đầu: Hà Nội
 - Điểm lấy dữ liệu đại diện: `latitude=21.0285`, `longitude=105.8542`.
 - Triển khai trước dự báo nhiệt độ, lượng mưa và khả năng có mưa cho Hà Nội; Đà Nẵng và TP.HCM thuộc giai đoạn mở rộng.
-- Thu thập dữ liệu NASA POWER theo giờ từ `2023-01-01` đến hết `2024-12-31`: dự kiến **17.544 dòng** trước xử lý nếu đủ mọi giờ.
+- Thu thập dữ liệu NASA POWER theo giờ từ `2001-01-01` đến hết `2025-12-31`: dự kiến **219,144 dòng** trước xử lý nếu đủ mọi giờ.
 - Mỗi dòng tương ứng một giờ tại điểm đại diện Hà Nội, không phải quan trắc cho toàn bộ thành phố. Dữ liệu thô lưu UTC; dữ liệu sạch chuyển sang giờ Việt Nam GMT+7 (`Asia/Ho_Chi_Minh`) ngay trong bước làm sạch.
 - Yêu cầu môn Khoa học dữ liệu: còn ít nhất **10.000 dòng hợp lệ sau làm sạch và tạo đặc trưng/nhãn**; kiểm tra thiếu giờ và trùng `city + timestamp`.
 - Tính năng bão vẫn theo Sprint 4: học quỹ đạo từ IBTrACS khu vực Biển Đông/Tây Bắc Thái Bình Dương và đánh giá ảnh hưởng tới Hà Nội; dữ liệu NASA tại Hà Nội không đủ để tự dự báo quỹ đạo bão.
@@ -39,7 +39,7 @@ Mô hình cốt lõi sử dụng các thuật toán Học máy tập hợp tối
 |---|---|
 | Điểm đại diện | Hà Nội: `latitude=21.0285`, `longitude=105.8542` |
 | Tần suất | `hourly`, một dòng mỗi giờ |
-| Khoảng thời gian nguồn | `2023-01-01 00:00 UTC` đến `2024-12-31 23:00 UTC`, bao gồm hai đầu |
+| Khoảng thời gian nguồn | `2001-01-01 00:00 UTC` đến `2025-12-31 23:00 UTC`, bao gồm hai đầu |
 | Múi giờ yêu cầu | `time-standard=UTC`; không dùng LST mặc định của API |
 | Nhóm tham số | `community=RE` |
 | Định dạng tải | `format=JSON`; lưu phản hồi từng tháng rồi tổng hợp CSV |
@@ -122,7 +122,7 @@ Mở terminal tại thư mục gốc repository (nơi có `README.md` và `src/`
 
 ```powershell
 python --version
-python -m src.data_collection.nasa_power --start 2023-01-01 --end 2024-12-31
+python -m src.data_collection.nasa_power --start 2001-01-01 --end 2025-12-31
 python -m src.preprocessing.cleaning
 python -m src.preprocessing.features --horizon 1
 ```
@@ -131,9 +131,9 @@ Chạy lần lượt; chỉ chuyển sang lệnh tiếp theo khi lệnh trước
 
 | Bước | File CSV đầu ra | Kết quả đã kiểm chứng với dữ liệu hiện tại |
 |---|---|---|
-| Tải nguồn | `data/raw/nasa_power/hanoi_hourly_20230101_20241231.csv` | 17.544 dòng, 11 cột, UTC |
-| Làm sạch | `data/cleaned/nasa_power/hanoi_hourly_20230101_20241231_clean.csv` | 17.544 dòng, 17 cột, GMT+7 |
-| Tạo đặc trưng/nhãn | `data/processed/nasa_power/hanoi_hourly_20230101_20241231_features_1h.csv` | 17.519 dòng, 35 cột; 21 đặc trưng và 3 nhãn |
+| Tải nguồn | `data/raw/nasa_power/hanoi_hourly_20010101_20251231.csv` | 219,144 dòng, 11 cột, UTC |
+| Làm sạch | `data/cleaned/nasa_power/hanoi_hourly_20010101_20251231_clean.csv` | 219,144 dòng, 17 cột, GMT+7 |
+| Tạo đặc trưng/nhãn | `data/processed/nasa_power/hanoi_hourly_20010101_20251231_features_1h.csv` | 219,119 dòng, 35 cột; 21 đặc trưng và 3 nhãn |
 
 Mỗi CSV có file `.metadata.json` cùng tên. JSON gốc từng tháng nằm trong `data/raw/nasa_power/responses/`; log từng lần chạy nằm trong `outputs/logs/data/`. Metadata và log lưu URL nguồn, cấu hình, số dòng và thông tin truy vết; các tầng xử lý bổ sung hash nguồn/đầu ra.
 

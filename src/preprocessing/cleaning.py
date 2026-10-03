@@ -15,7 +15,7 @@ from src.data_collection.nasa_power import LATITUDE, LONGITUDE, PARAMETERS
 from src.data_audit import DataAudit, DEFAULT_LOG_DIR, file_info
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_INPUT = ROOT / "data/raw/nasa_power/hanoi_hourly_20230101_20241231.csv"
+DEFAULT_INPUT = ROOT / "data/raw/nasa_power/hanoi_hourly_20010101_20251231.csv"
 DEFAULT_OUTPUT = ROOT / "data/cleaned/nasa_power"
 STATION_ID = "NASA_POWER_HANOI_21.0285_105.8542"
 VERSION = "1.1"

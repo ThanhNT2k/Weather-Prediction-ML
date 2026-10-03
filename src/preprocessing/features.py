@@ -15,7 +15,7 @@ from src.data_audit import DataAudit, DEFAULT_LOG_DIR, file_info
 from src.data_collection.nasa_power import PARAMETERS
 from src.preprocessing.cleaning import ROOT, STATION_ID, record_id, numeric_value, write_atomic
 
-DEFAULT_INPUT = ROOT / "data/cleaned/nasa_power/hanoi_hourly_20230101_20241231_clean.csv"
+DEFAULT_INPUT = ROOT / "data/cleaned/nasa_power/hanoi_hourly_20010101_20251231_clean.csv"
 DEFAULT_OUTPUT = ROOT / "data/processed/nasa_power"
 SCHEMA_PATH = ROOT / "docs/data_schema.json"
 LOOKBACK = 24
@@ -58,7 +58,12 @@ def build_features(input_path=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT, horizon=
         
         # 1. Tính toán trước mảng xác định thời điểm ban đêm bằng pvlib cho toàn bộ timestamps
         timestamps_list = [datetime.fromisoformat(row["timestamp"]) for row in rows]
-        tz_times = pd.DatetimeIndex(timestamps_list).tz_localize("Asia/Ho_Chi_Minh")
+        # Convert timestamps to timezone-aware DatetimeIndex. If already tz-aware, convert; otherwise localize.
+        tz_index = pd.DatetimeIndex(timestamps_list)
+        if tz_index.tz is None:
+            tz_times = tz_index.tz_localize("Asia/Ho_Chi_Minh")
+        else:
+            tz_times = tz_index.tz_convert("Asia/Ho_Chi_Minh")
         solar_position = pvlib.solarposition.get_solarposition(tz_times, LATITUDE, LONGITUDE)
         # Góc thiên đỉnh > 90 độ đồng nghĩa mặt trời đã lặn dưới đường chân trời (ban đêm)
         is_night_array = solar_position["apparent_zenith"] > 90
@@ -85,7 +90,7 @@ def build_features(input_path=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT, horizon=
             observation = {key: numeric_value(row[key], key, {-999.0}) for key in PARAMETERS}
             
             # 2. Tự động ép bức xạ mặt trời về 0 nếu xác định là ban đêm
-            if is_night_array[i] and "ALLSKY_SFC_SW_DWN" in observation:
+            if is_night_array.iloc[i] and "ALLSKY_SFC_SW_DWN" in observation:
                 observation["ALLSKY_SFC_SW_DWN"] = 0.0
 
             if any(value is None for value in observation.values()):
@@ -178,10 +183,8 @@ def main():
     parser.add_argument("--min-rows", type=int, default=10000)
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
     args = parser.parse_args()
-    try:
-        path, report = build_features(args.input, args.output_dir, args.horizon, args.min_rows, args.log_dir)
-    except (OSError, ValueError, KeyError) as exc:
-        parser.exit(1, f"Feature engineering failed: {exc}\n")
+    # Directly run feature building; let any exception propagate for a full traceback
+    path, report = build_features(args.input, args.output_dir, args.horizon, args.min_rows, args.log_dir)
     print(json.dumps({"output": str(path), "rows": report["output_rows"], "audit_log": report["audit_log"]}, indent=2))
 
 
