@@ -1,0 +1,257 @@
+{
+  "before": {
+    "rows": 219144,
+    "columns": [
+      "timestamp",
+      "city",
+      "latitude",
+      "longitude",
+      "T2M",
+      "PRECTOTCORR",
+      "RH2M",
+      "PS",
+      "WS2M",
+      "WD2M",
+      "ALLSKY_SFC_SW_DWN",
+      "source_row_numbers",
+      "is_inserted_hour",
+      "is_imputed",
+      "imputed_columns",
+      "station_id",
+      "record_id"
+    ],
+    "exact_duplicate_rows": 0,
+    "duplicate_timestamps": 0,
+    "blank_cells": {
+      "T2M": 0,
+      "PRECTOTCORR": 0,
+      "RH2M": 0,
+      "PS": 0,
+      "WS2M": 0,
+      "WD2M": 0,
+      "ALLSKY_SFC_SW_DWN": 0
+    },
+    "unparseable_cells": {
+      "T2M": 0,
+      "PRECTOTCORR": 0,
+      "RH2M": 0,
+      "PS": 0,
+      "WS2M": 0,
+      "WD2M": 0,
+      "ALLSKY_SFC_SW_DWN": 0
+    },
+    "fill_value_cells": {
+      "T2M": 0,
+      "PRECTOTCORR": 0,
+      "RH2M": 0,
+      "PS": 0,
+      "WS2M": 0,
+      "WD2M": 0,
+      "ALLSKY_SFC_SW_DWN": 0
+    },
+    "describe": {
+      "T2M": {
+        "count": 219144.0,
+        "mean": 23.326,
+        "std": 6.218,
+        "min": 1.53,
+        "25%": 19.12,
+        "50%": 24.65,
+        "75%": 27.66,
+        "max": 41.92
+      },
+      "PRECTOTCORR": {
+        "count": 219144.0,
+        "mean": 0.191,
+        "std": 0.553,
+        "min": 0.0,
+        "25%": 0.0,
+        "50%": 0.01,
+        "75%": 0.12,
+        "max": 30.9
+      },
+      "RH2M": {
+        "count": 219144.0,
+        "mean": 82.383,
+        "std": 14.558,
+        "min": 17.04,
+        "25%": 71.88,
+        "50%": 86.52,
+        "75%": 94.77,
+        "max": 100.0
+      },
+      "PS": {
+        "count": 219144.0,
+        "mean": 100.099,
+        "std": 0.725,
+        "min": 97.27,
+        "25%": 99.51,
+        "50%": 100.05,
+        "75%": 100.65,
+        "max": 103.05
+      },
+      "WS2M": {
+        "count": 219144.0,
+        "mean": 1.739,
+        "std": 1.034,
+        "min": 0.0,
+        "25%": 0.95,
+        "50%": 1.49,
+        "75%": 2.32,
+        "max": 11.64
+      },
+      "WD2M": {
+        "count": 219144.0,
+        "mean": 135.307,
+        "std": 86.938,
+        "min": 0.0,
+        "25%": 64.6,
+        "50%": 135.6,
+        "75%": 166.5,
+        "max": 359.9
+      },
+      "ALLSKY_SFC_SW_DWN": {
+        "count": 219144.0,
+        "mean": 155.82,
+        "std": 228.23,
+        "min": 0.0,
+        "25%": 0.0,
+        "50%": 5.5,
+        "75%": 262.35,
+        "max": 1020.8
+      }
+    }
+  },
+  "steps": {
+    "invalid_to_nan": {
+      "T2M": 0,
+      "PRECTOTCORR": 0,
+      "RH2M": 0,
+      "PS": 0,
+      "WS2M": 0,
+      "WD2M": 0,
+      "ALLSKY_SFC_SW_DWN": 0
+    },
+    "wind_direction_360_to_0": 0,
+    "exact_duplicates_removed": 0,
+    "inserted_hours": 0,
+    "missing_cells_before_fill": {
+      "T2M": 0,
+      "PRECTOTCORR": 0,
+      "RH2M": 0,
+      "PS": 0,
+      "WS2M": 0,
+      "WD2M": 0,
+      "ALLSKY_SFC_SW_DWN": 0
+    },
+    "interpolated_cells": {
+      "T2M": 0,
+      "PRECTOTCORR": 0,
+      "RH2M": 0,
+      "PS": 0,
+      "WS2M": 0,
+      "WD2M": 0,
+      "ALLSKY_SFC_SW_DWN": 0
+    },
+    "missing_cells_after_fill": {
+      "T2M": 0,
+      "PRECTOTCORR": 0,
+      "RH2M": 0,
+      "PS": 0,
+      "WS2M": 0,
+      "WD2M": 0,
+      "ALLSKY_SFC_SW_DWN": 0
+    },
+    "outlier_flags_kept": {
+      "seasonal_robust_z>5": 4692,
+      "wet_hour_q99.9>8.50": 58
+    }
+  },
+  "after": {
+    "rows": 219144,
+    "start": "2001-01-01 07:00:00+07:00",
+    "end": "2026-01-01 06:00:00+07:00",
+    "describe": {
+      "T2M": {
+        "count": 219144.0,
+        "mean": 23.326,
+        "std": 6.218,
+        "min": 1.53,
+        "25%": 19.12,
+        "50%": 24.65,
+        "75%": 27.66,
+        "max": 41.92
+      },
+      "PRECTOTCORR": {
+        "count": 219144.0,
+        "mean": 0.191,
+        "std": 0.553,
+        "min": 0.0,
+        "25%": 0.0,
+        "50%": 0.01,
+        "75%": 0.12,
+        "max": 30.9
+      },
+      "RH2M": {
+        "count": 219144.0,
+        "mean": 82.383,
+        "std": 14.558,
+        "min": 17.04,
+        "25%": 71.88,
+        "50%": 86.52,
+        "75%": 94.77,
+        "max": 100.0
+      },
+      "PS": {
+        "count": 219144.0,
+        "mean": 100.099,
+        "std": 0.725,
+        "min": 97.27,
+        "25%": 99.51,
+        "50%": 100.05,
+        "75%": 100.65,
+        "max": 103.05
+      },
+      "WS2M": {
+        "count": 219144.0,
+        "mean": 1.739,
+        "std": 1.034,
+        "min": 0.0,
+        "25%": 0.95,
+        "50%": 1.49,
+        "75%": 2.32,
+        "max": 11.64
+      },
+      "WD2M": {
+        "count": 219144.0,
+        "mean": 135.307,
+        "std": 86.938,
+        "min": 0.0,
+        "25%": 64.6,
+        "50%": 135.6,
+        "75%": 166.5,
+        "max": 359.9
+      },
+      "ALLSKY_SFC_SW_DWN": {
+        "count": 219144.0,
+        "mean": 155.82,
+        "std": 228.23,
+        "min": 0.0,
+        "25%": 0.0,
+        "50%": 5.5,
+        "75%": 262.35,
+        "max": 1020.8
+      }
+    }
+  },
+  "cleaning_version": "2.0",
+  "generated_at": "2026-10-04T13:36:49.351739+00:00",
+  "source": {
+    "path": "E:\\AI projects\\weather-prediction-ML\\Weather-Prediction-ML\\outputs\\timeseries_quality_v2\\hanoi_hourly_20010101_20251231_quality_clean.csv",
+    "exists": true,
+    "sha256": "8e53549c38acd64faade253af124ed695b4f71c8cddecea0793cd3f2b06197b3"
+  },
+  "timezone": "Asia/Ho_Chi_Minh",
+  "sha256": "0cd2ab34d6fba4ebdb12e141e289eefb8d3c467716eb6e4b2e5859d074c7585f",
+  "audit_log": "E:\\AI projects\\weather-prediction-ML\\Weather-Prediction-ML\\outputs\\logs\\data\\20261004T203634357632_2631bcea_cleaning.log"
+}

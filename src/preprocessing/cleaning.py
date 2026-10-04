@@ -1,245 +1,239 @@
-"""Clean Hanoi NASA POWER data, preserving stable IDs and source lineage."""
+"""Step 1 - clean Hanoi NASA POWER hourly data: python -m src.preprocessing.cleaning.
+
+raw (UTC) -> audit -> local time -> invalid values to NaN -> duplicates ->
+continuous hourly axis -> short-gap interpolation -> outlier flags (kept).
+"""
 
 import argparse
-import bisect
-import csv
-from datetime import datetime, timedelta, timezone
 import hashlib
-import io
 import json
-import math
+from datetime import datetime, timezone
 from pathlib import Path
-from uuid import NAMESPACE_URL, uuid5
 
-from src.data_collection.nasa_power import LATITUDE, LONGITUDE, PARAMETERS
+import numpy as np
+import pandas as pd
+
 from src.data_audit import DataAudit, DEFAULT_LOG_DIR, file_info
+from src.preprocessing.config import (CLEANED_DIR, FALLBACK_RAW_PATH, FILL_VALUES, MAX_INTERPOLATE_HOURS,
+                                      PHYSICAL_BOUNDS, RAW_PATH, REPORT_DIR, ROBUST_Z_LIMIT, ROOT, STEM,
+                                      TIMEZONE, VARS)
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_INPUT = ROOT / "data/raw/nasa_power/hanoi_hourly_20010101_20251231.csv"
-DEFAULT_OUTPUT = ROOT / "data/cleaned/nasa_power"
-STATION_ID = "NASA_POWER_HANOI_21.0285_105.8542"
-VERSION = "1.1"
-# Vietnam uses UTC+07:00 throughout the dataset; no external tzdata required.
-VIETNAM_TIMEZONE = timezone(timedelta(hours=7), name="Asia/Ho_Chi_Minh")
+VERSION = "2.0"
+CLEAN_COLUMNS = ["timestamp", *VARS, "is_inserted_hour", "is_imputed", "imputed_columns", "outlier_flags"]
 
 
-def record_id(timestamp):
-    """Identity does not depend on row order, file name or weather values."""
-    timestamp = normalize_timestamp(timestamp).strftime("%Y-%m-%dT%H:00:00Z")
-    return str(uuid5(NAMESPACE_URL, f"nasa-power/hourly/{STATION_ID}/{timestamp}"))
+def default_input():
+    return RAW_PATH if RAW_PATH.exists() else FALLBACK_RAW_PATH
 
 
-def normalize_timestamp(value):
-    parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        raise ValueError("Timestamp must include an explicit timezone")
-    parsed = parsed.astimezone(timezone.utc)
-    if parsed.minute or parsed.second or parsed.microsecond:
-        raise ValueError("Timestamp must be aligned to an exact hour")
-    return parsed
+def read_raw(path):
+    """Read every column as text so blanks/garbage are counted, not silently parsed."""
+    return pd.read_csv(path, encoding="utf-8-sig", dtype=str, keep_default_na=False)
 
 
-def numeric_value(value, parameter, fill_values):
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(result) or result in fill_values:
-        return None
-    if parameter == "T2M" and result < -273.15:
-        return None
-    if parameter == "RH2M" and not 0 <= result <= 100:
-        return None
-    if parameter == "WD2M":
-        return result % 360 if 0 <= result <= 360 else None
-    if parameter == "PS" and result <= 0:
-        return None
-    if parameter in ("PRECTOTCORR", "WS2M", "ALLSKY_SFC_SW_DWN") and result < 0:
-        return None
-    return result
+def audit_raw(raw):
+    """Profile the file before touching it (what the report calls 'before cleaning')."""
+    numeric = raw[VARS].apply(pd.to_numeric, errors="coerce")
+    blank = raw[VARS].apply(lambda s: s.str.strip().eq("")).sum()
+    return {
+        "rows": len(raw),
+        "columns": list(raw.columns),
+        "exact_duplicate_rows": int(raw.duplicated().sum()),
+        "duplicate_timestamps": int(raw["timestamp"].duplicated().sum()),
+        "blank_cells": blank.astype(int).to_dict(),
+        "unparseable_cells": (numeric.isna() & ~raw[VARS].apply(lambda s: s.str.strip().eq(""))).sum().astype(int).to_dict(),
+        "fill_value_cells": numeric.isin(FILL_VALUES).sum().astype(int).to_dict(),
+        "describe": numeric.describe().round(3).to_dict(),
+    }
 
 
-def fill_series(values, circular=False):
-    """Interpolate inside gaps; use nearest valid value at either edge.
+def parse_timestamps(text):
+    """Timestamps must carry an explicit offset and sit on exact hours."""
+    if not text.str.contains(r"(?:Z|[+-]\d{2}:?\d{2})$", regex=True).all():
+        raise ValueError("Every timestamp must include an explicit timezone offset")
+    parsed = pd.to_datetime(text, utc=True, errors="coerce", format="ISO8601")
+    if parsed.isna().any():
+        raise ValueError(f"{int(parsed.isna().sum())} timestamps cannot be parsed")
+    if parsed.ne(parsed.dt.floor("h")).any():
+        raise ValueError("Timestamps must be aligned to exact hours")
+    return parsed.dt.tz_convert(TIMEZONE)
 
-    Wind direction follows the shortest angular path across north (0 degrees).
+
+def gap_lengths(missing):
+    """Length of the NaN run each hour belongs to (0 for observed hours)."""
+    run_id = missing.ne(missing.shift()).cumsum()
+    return missing.groupby(run_id).transform("sum").where(missing, 0).astype(int)
+
+
+def interpolate_short_gaps(frame, max_hours=MAX_INTERPOLATE_HOURS):
+    """Time-interpolate interior gaps of <= max_hours; longer gaps stay NaN.
+
+    Wind direction is interpolated through its (u, v) vector so 350° -> 10°
+    passes north instead of sweeping back through 180°.
     """
-    valid = [index for index, value in enumerate(values) if value is not None]
-    if not valid:
-        raise ValueError("Cannot impute a parameter with no valid observations")
-    result = list(values)
-    for index, value in enumerate(values):
-        if value is not None:
-            continue
-        position = bisect.bisect_left(valid, index)
-        if position == 0:
-            result[index] = values[valid[0]]  # bfill at the leading edge
-        elif position == len(valid):
-            result[index] = values[valid[-1]]  # ffill at the trailing edge
-        else:
-            left, right = valid[position - 1], valid[position]
-            difference = values[right] - values[left]
-            if circular:
-                difference = (difference + 180) % 360 - 180
-            interpolated = values[left] + difference * (index - left) / (right - left)
-            result[index] = interpolated % 360 if circular else interpolated
-    return result
+    out = frame.copy()
+    filled = pd.DataFrame(False, index=frame.index, columns=VARS)
+    linear = [c for c in VARS if c != "WD2M"]
+    for column in linear:
+        missing = frame[column].isna()
+        eligible = missing & gap_lengths(missing).le(max_hours)
+        candidate = frame[column].interpolate(method="time", limit_area="inside")
+        eligible &= candidate.notna()
+        out.loc[eligible, column] = candidate[eligible]
+        filled[column] = eligible
+    radians = np.deg2rad(frame["WD2M"])
+    u = np.sin(radians).interpolate(method="time", limit_area="inside")
+    v = np.cos(radians).interpolate(method="time", limit_area="inside")
+    missing = frame["WD2M"].isna()
+    eligible = missing & gap_lengths(missing).le(max_hours) & u.notna()
+    out.loc[eligible, "WD2M"] = (np.rad2deg(np.arctan2(u, v)) % 360)[eligible].round(1)
+    filled["WD2M"] = eligible
+    return out, filled
 
 
-def write_atomic(path, content):
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    with temporary.open("w", encoding="utf-8", newline="") as stream:
-        stream.write(content)
-    temporary.replace(path)
+def seasonal_robust_z(series):
+    """|x - median| / (1.4826 * MAD) inside the same (month, local hour) group.
+
+    Grouping by season and hour stops a normal 12°C winter morning from being
+    judged against summer afternoons. Groups with MAD = 0 (night radiation) are
+    skipped instead of dividing by zero.
+    """
+    keys = [series.index.month, series.index.hour]
+    median = series.groupby(keys).transform("median")
+    deviation = (series - median).abs()
+    mad = deviation.groupby(keys).transform("median")
+    return deviation / (1.4826 * mad.replace(0, np.nan))
 
 
-def clean(input_path=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT, min_rows=10000, log_dir=DEFAULT_LOG_DIR):
+def flag_outliers(frame):
+    """Return one row per flagged cell. Flags are evidence for review, not deletions."""
+    tables = []
+    for column in ["T2M", "RH2M", "PS", "WS2M", "ALLSKY_SFC_SW_DWN"]:
+        z = seasonal_robust_z(frame[column])
+        hit = z.gt(ROBUST_Z_LIMIT)
+        tables.append(pd.DataFrame({"timestamp": frame.index[hit], "variable": column,
+                                    "value": frame.loc[hit, column].to_numpy(),
+                                    "robust_z": z[hit].round(2).to_numpy(), "rule": "seasonal_robust_z>5"}))
+    # Rain is zero-inflated (MAD = 0 almost everywhere): flag the top 0.1% wet hours instead.
+    rain = frame["PRECTOTCORR"]
+    limit = rain[rain > 0.1].quantile(0.999)
+    hit = rain.gt(limit)
+    tables.append(pd.DataFrame({"timestamp": frame.index[hit], "variable": "PRECTOTCORR",
+                                "value": rain[hit].to_numpy(), "robust_z": np.nan,
+                                "rule": f"wet_hour_q99.9>{limit:.2f}"}))
+    # Temperature cannot physically jump > 8°C within one hour at 2 m.
+    jump = frame["T2M"].diff().abs()
+    hit = jump.gt(8)
+    tables.append(pd.DataFrame({"timestamp": frame.index[hit], "variable": "T2M",
+                                "value": frame.loc[hit, "T2M"].to_numpy(), "robust_z": np.nan,
+                                "rule": "hourly_jump>8C"}))
+    return pd.concat(tables, ignore_index=True).sort_values(["timestamp", "variable"]).reset_index(drop=True)
+
+
+def clean_frame(raw):
+    """Pure transformation used by the CLI and the tests. Returns (clean, report, flags)."""
+    required = {"timestamp", *VARS}
+    if not required.issubset(raw.columns):
+        raise ValueError(f"Missing CSV columns: {sorted(required - set(raw.columns))}")
+    report = {"before": audit_raw(raw), "steps": {}}
+    work = pd.DataFrame({"timestamp": parse_timestamps(raw["timestamp"])})
+
+    invalid, wind_360 = {}, 0
+    for column in VARS:
+        values = pd.to_numeric(raw[column], errors="coerce")
+        low, high = PHYSICAL_BOUNDS[column]
+        bad = values.isna() | ~np.isfinite(values) | values.isin(FILL_VALUES) | ~values.between(low, high)
+        invalid[column] = int(bad.sum())
+        work[column] = values.mask(bad)
+    wind_360 = int(work["WD2M"].eq(360).sum())
+    work["WD2M"] = work["WD2M"].replace(360.0, 0.0)
+    report["steps"]["invalid_to_nan"] = invalid
+    report["steps"]["wind_direction_360_to_0"] = wind_360
+
+    exact = work.duplicated()
+    work = work.loc[~exact]
+    conflicts = work["timestamp"].duplicated(keep=False)
+    if conflicts.any():
+        raise ValueError(f"{int(conflicts.sum())} rows share a timestamp but disagree on values")
+    report["steps"]["exact_duplicates_removed"] = int(exact.sum())
+
+    work = work.set_index("timestamp").sort_index()
+    full_index = pd.date_range(work.index[0], work.index[-1], freq="h", name="timestamp")
+    inserted = ~full_index.isin(work.index)
+    work = work.reindex(full_index)
+    report["steps"]["inserted_hours"] = int(inserted.sum())
+
+    missing_before = work[VARS].isna()
+    work, filled = interpolate_short_gaps(work)
+    report["steps"]["missing_cells_before_fill"] = missing_before.sum().astype(int).to_dict()
+    report["steps"]["interpolated_cells"] = filled.sum().astype(int).to_dict()
+    report["steps"]["missing_cells_after_fill"] = work[VARS].isna().sum().astype(int).to_dict()
+
+    flags = flag_outliers(work)
+    report["steps"]["outlier_flags_kept"] = flags.groupby("rule").size().astype(int).to_dict()
+
+    work["is_inserted_hour"] = inserted.astype(int)
+    work["is_imputed"] = filled.any(axis=1).astype(int)
+    work["imputed_columns"] = filled.apply(lambda row: "|".join(row.index[row]) or "none", axis=1)
+    flagged = flags.groupby("timestamp")["variable"].agg(lambda s: "|".join(sorted(set(s))))
+    work["outlier_flags"] = flagged.reindex(work.index).fillna("none")
+    report["after"] = {"rows": len(work), "start": str(work.index[0]), "end": str(work.index[-1]),
+                       "describe": work[VARS].describe().round(3).to_dict()}
+    return work, report, flags
+
+
+def clean(input_path=None, output_dir=CLEANED_DIR, min_rows=10000, log_dir=DEFAULT_LOG_DIR):
+    input_path = default_input() if input_path is None else input_path
     with DataAudit("cleaning", {"input": str(input_path), "output_dir": str(output_dir),
                                "min_rows": min_rows, "cleaning_version": VERSION}, __file__, log_dir) as audit:
-        return _clean(input_path, output_dir, min_rows, audit)
+        input_path, output_dir = Path(input_path).resolve(), Path(output_dir).resolve()
+        if output_dir.is_relative_to(ROOT / "data/raw"):
+            raise ValueError("Cleaned output must not be written into data/raw")
+        audit.event("INPUT", "Đọc dữ liệu nguồn (chỉ đọc)", **file_info(input_path))
+        cleaned, report, flags = clean_frame(read_raw(input_path))
+        if cleaned[VARS].notna().all(axis=1).sum() < min_rows:
+            raise ValueError(f"Fewer than {min_rows} complete hourly rows after cleaning")
+        audit.event("TRANSFORMED", "Làm sạch xong", **report["steps"])
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = output_dir / f"{STEM}_clean.csv"
+        if csv_path == input_path:
+            raise ValueError("Refusing to overwrite the input file")
+        out = cleaned.reset_index()
+        out["timestamp"] = out["timestamp"].map(lambda t: t.isoformat())
+        out[CLEAN_COLUMNS].to_csv(csv_path, index=False, encoding="utf-8")
+        flags_path = output_dir / f"{STEM}_outlier_flags.csv"
+        flags.assign(timestamp=flags["timestamp"].map(lambda t: t.isoformat())).to_csv(flags_path, index=False)
+        report.update({"cleaning_version": VERSION, "generated_at": datetime.now(timezone.utc).isoformat(),
+                       "source": file_info(input_path), "timezone": TIMEZONE,
+                       "sha256": hashlib.sha256(csv_path.read_bytes()).hexdigest(),
+                       "audit_log": str(audit.path)})
+        metadata = json.dumps(report, ensure_ascii=False, indent=2, default=str)
+        csv_path.with_suffix(".metadata.json").write_text(metadata, encoding="utf-8")
+        if output_dir == CLEANED_DIR.resolve():  # small, human-readable copy kept in Git
+            REPORT_DIR.mkdir(parents=True, exist_ok=True)
+            (REPORT_DIR / "cleaning_report.json").write_text(metadata, encoding="utf-8")
+        audit.event("WRITTEN", "Đã ghi CSV sạch, cờ ngoại lệ và metadata", **file_info(csv_path))
+        return csv_path, report
 
 
-def _clean(input_path, output_dir, min_rows, audit):
-    input_path, output_dir = Path(input_path).resolve(), Path(output_dir).resolve()
-    if min_rows < 1:
-        raise ValueError("min_rows must be positive")
-    raw_bytes = input_path.read_bytes()
-    source_hash = hashlib.sha256(raw_bytes).hexdigest()
-    audit.event("INPUT", "Đọc dữ liệu nguồn, không chỉnh sửa file gốc", **file_info(input_path))
-    metadata_path = input_path.with_suffix(".metadata.json")
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
-    fill_values = {-999.0}
-    fill_values.update(source["fill_value"] for source in metadata.get("sources", []) if source.get("fill_value") is not None)
-    reader = csv.DictReader(io.StringIO(raw_bytes.decode("utf-8-sig"), newline=""))
-    required = {"timestamp", "city", "latitude", "longitude", *PARAMETERS}
-    if not required.issubset(reader.fieldnames or []):
-        raise ValueError(f"Missing CSV columns: {sorted(required - set(reader.fieldnames or []))}")
-    observations, lineage = {}, {}
-    input_rows = duplicates = wind_normalized = 0
-    for row_number, raw in enumerate(reader, start=1):
-        input_rows += 1
-        if None in raw:
-            raise ValueError(f"Malformed CSV record {row_number}")
-        if raw["city"].strip() != "Hanoi" or not (
-            math.isclose(float(raw["latitude"]), LATITUDE, abs_tol=0.000001)
-            and math.isclose(float(raw["longitude"]), LONGITUDE, abs_tol=0.000001)
-        ):
-            raise ValueError(f"Record {row_number}: expected the configured Hanoi location")
-        timestamp = normalize_timestamp(raw["timestamp"])
-        try:
-            wind_normalized += float(raw["WD2M"]) == 360
-        except (TypeError, ValueError):
-            pass
-        values = tuple(numeric_value(raw[key], key, fill_values) for key in PARAMETERS)
-        if timestamp in observations:
-            if observations[timestamp] != values:
-                raise ValueError(f"Conflicting duplicate at {timestamp.isoformat()}")
-            duplicates += 1
-            lineage[timestamp].append(row_number)
-        else:
-            observations[timestamp] = values
-            lineage[timestamp] = [row_number]
-    if not observations:
-        raise ValueError("Input CSV has no observations")
-    first, last = min(observations), max(observations)
-    if metadata.get("start") and metadata.get("end"):
-        first = datetime.fromisoformat(metadata["start"]).replace(tzinfo=timezone.utc)
-        last = datetime.fromisoformat(metadata["end"]).replace(tzinfo=timezone.utc) + timedelta(hours=23)
-        if first > last or min(observations) < first or max(observations) > last:
-            raise ValueError("Input timestamps conflict with metadata date range")
-    timestamps = [first + timedelta(hours=i) for i in range(int((last - first).total_seconds() // 3600) + 1)]
-    if len(observations) < min_rows:
-        raise ValueError(f"Only {len(observations)} unique observed rows; minimum is {min_rows}")
-    audit.event("VALIDATED", "Kiểm tra vị trí Hà Nội, chuẩn hóa thời điểm, sắp xếp và loại dòng trùng giống nhau",
-                input_rows=input_rows, unique_observed_rows=len(observations), duplicates_removed=duplicates,
-                inserted_hours=len(timestamps)-len(observations), wind_360_to_0_input_rows=wind_normalized)
-    columns = {
-        key: [observations.get(stamp, (None,) * len(PARAMETERS))[index] for stamp in timestamps]
-        for index, key in enumerate(PARAMETERS)
-    }
-    cleaned = {}
-    for key in PARAMETERS:
-        try:
-            cleaned[key] = fill_series(columns[key], circular=key == "WD2M")
-        except ValueError as exc:
-            raise ValueError(f"{key}: {exc}") from exc
-    fieldnames = ["record_id", "station_id", "timestamp", "city", "latitude", "longitude", *PARAMETERS,
-                  "is_imputed", "imputed_columns", "is_inserted_hour", "source_row_numbers"]
-    stream = io.StringIO(newline="")
-    writer = csv.DictWriter(stream, fieldnames=fieldnames)
-    writer.writeheader()
-    imputed_rows = 0
-    for index, stamp in enumerate(timestamps):
-        timestamp = stamp.astimezone(VIETNAM_TIMEZONE).isoformat(timespec="seconds")
-        imputed = [key for key in PARAMETERS if columns[key][index] is None]
-        imputed_rows += bool(imputed)
-        writer.writerow({
-            "record_id": record_id(timestamp), "station_id": STATION_ID, "timestamp": timestamp,
-            "city": "Hanoi", "latitude": LATITUDE, "longitude": LONGITUDE,
-            **{key: cleaned[key][index] for key in PARAMETERS},
-            "is_imputed": int(bool(imputed)), "imputed_columns": "|".join(imputed) or "none",
-            "is_inserted_hour": int(stamp not in observations),
-            "source_row_numbers": "|".join(map(str, lineage.get(stamp, []))) or "none",
-        })
-    content = stream.getvalue()
-    output_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    stem = f"hanoi_hourly_{first:%Y%m%d}_{last:%Y%m%d}_clean"
-    csv_path = output_dir / f"{stem}.csv"
-    if csv_path.resolve() == input_path or output_dir.is_relative_to(ROOT / "data/raw"):
-        raise ValueError("Cleaned output must not overwrite or reside in raw data")
-    report = {
-        "dataset_id": f"sha256:{output_hash}", "cleaning_version": VERSION,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "source_file": str(input_path), "source_sha256": source_hash,
-        "source_metadata_sha256": hashlib.sha256(metadata_path.read_bytes()).hexdigest() if metadata_path.exists() else None,
-        "station_id": STATION_ID, "record_id_scheme": "UUID5(NAMESPACE_URL, nasa-power/hourly/{station_id}/{UTC timestamp})",
-        "time_standard": "UTC+07:00", "timezone": "Asia/Ho_Chi_Minh",
-        "start": timestamps[0].astimezone(VIETNAM_TIMEZONE).isoformat(),
-        "end": timestamps[-1].astimezone(VIETNAM_TIMEZONE).isoformat(),
-        "source_time_standard": "UTC", "filename_date_basis": "source UTC dates",
-        "input_rows": input_rows, "unique_observed_rows": len(observations), "output_rows": len(timestamps),
-        "duplicates_removed": duplicates, "inserted_hours": len(timestamps) - len(observations),
-        "imputed_rows": imputed_rows,
-        "imputed_values": {key: sum(value is None for value in columns[key]) for key in PARAMETERS},
-        "remaining_missing_values": 0, "minimum_observed_rows": min_rows,
-        "meets_10000_observed_rows": len(observations) >= 10000,
-        "parameters": metadata.get("parameters", {}),
-        "imputation": "Linear interpolation; leading bfill, trailing ffill; shortest angular interpolation for WD2M.",
-        "evaluation_note": "Retrospective cleaned data. For forecasting evaluation, split raw data by time first and prevent interpolation across splits or future observations. Do not use imputed values as evaluation ground truth.",
-    }
-    output_dir.mkdir(parents=True, exist_ok=True)
-    report["audit_run_id"] = audit.run_id
-    report["audit_log"] = str(audit.path)
-    audit.event("TRANSFORMED", "Hoàn tất làm sạch và chuyển giờ GMT+7 trong bộ nhớ",
-                rules={"invalid_values": "Ô trống, không phải số, NaN/Infinity, fill value và ngoài miền vật lý → thiếu",
-                       "interpolation": report["imputation"], "timezone": "UTC → GMT+7, giữ cùng thời điểm",
-                       "identity": "record_id ổn định theo station_id và thời điểm UTC"},
-                output_rows=len(timestamps), imputed_rows=imputed_rows, imputed_values=report["imputed_values"],
-                remaining_missing_values=0, start=report["start"], end=report["end"])
-    audit.event("WRITE_PLANNED", "Chuẩn bị xuất CSV sạch", previous_output=file_info(csv_path),
-                new_sha256=output_hash)
-    write_atomic(csv_path, content)
-    audit.event("WRITTEN", "Đã ghi CSV sạch", **file_info(csv_path))
-    write_atomic(output_dir / f"{stem}.metadata.json", json.dumps(report, ensure_ascii=False, indent=2))
-    audit.event("WRITTEN", "Đã ghi metadata và liên kết log", **file_info(output_dir / f"{stem}.metadata.json"))
-    return csv_path, report
+def load_cleaned(path=None):
+    path = CLEANED_DIR / f"{STEM}_clean.csv" if path is None else Path(path)
+    frame = pd.read_csv(path, encoding="utf-8")
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True).dt.tz_convert(TIMEZONE)
+    return frame.set_index("timestamp")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--input", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=CLEANED_DIR)
     parser.add_argument("--min-rows", type=int, default=10000)
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
     args = parser.parse_args()
-    try:
-        path, report = clean(args.input, args.output_dir, args.min_rows, args.log_dir)
-    except (OSError, ValueError, TypeError, KeyError) as exc:
-        parser.exit(1, f"Cleaning failed: {exc}\n")
-    print(json.dumps({"output": str(path), "rows": report["output_rows"],
-                      "duplicates_removed": report["duplicates_removed"],
-                      "inserted_hours": report["inserted_hours"], "imputed_rows": report["imputed_rows"],
-                      "audit_log": report["audit_log"]}, indent=2))
+    path, report = clean(args.input, args.output_dir, args.min_rows, args.log_dir)
+    print(json.dumps({"output": str(path), "rows": report["after"]["rows"], **report["steps"]},
+                     ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,134 @@
+{
+  "version": "2.0",
+  "generated_at": "2026-10-04T13:37:00.145879+00:00",
+  "source": "E:\\AI projects\\weather-prediction-ML\\Weather-Prediction-ML\\data\\cleaned\\nasa_power\\hanoi_hourly_20010101_20251231_clean.csv",
+  "sha256": "9c9b4807e02689ffad1b17a92671d0c12541f883321e3ecd9253ae8282236bb4",
+  "timezone": "Asia/Ho_Chi_Minh",
+  "rows": 219144,
+  "horizons_hours": [
+    1,
+    6,
+    12,
+    24
+  ],
+  "seq_len": 48,
+  "targets": [
+    "T2M_t+1h",
+    "T2M_t+6h",
+    "T2M_t+12h",
+    "T2M_t+24h"
+  ],
+  "target_unit": "°C (unscaled)",
+  "sequence_features": [
+    "T2M",
+    "RH2M",
+    "DEWPOINT",
+    "PS",
+    "WS2M",
+    "WIND_U",
+    "WIND_V",
+    "PRECTOTCORR_log1p",
+    "ALLSKY_SFC_SW_DWN",
+    "hour_sin",
+    "hour_cos",
+    "doy_sin",
+    "doy_cos"
+  ],
+  "tabular_features": [
+    "T2M",
+    "RH2M",
+    "DEWPOINT",
+    "PS",
+    "WS2M",
+    "WIND_U",
+    "WIND_V",
+    "PRECTOTCORR_log1p",
+    "ALLSKY_SFC_SW_DWN",
+    "hour_sin",
+    "hour_cos",
+    "doy_sin",
+    "doy_cos",
+    "T2M_lag_1h",
+    "T2M_lag_2h",
+    "T2M_lag_3h",
+    "T2M_lag_6h",
+    "T2M_lag_12h",
+    "T2M_lag_24h",
+    "T2M_roll_mean_24h",
+    "T2M_roll_min_24h",
+    "T2M_roll_max_24h",
+    "PS_diff_3h",
+    "PS_diff_24h",
+    "PRECTOTCORR_sum_24h_log1p",
+    "ALLSKY_sum_24h"
+  ],
+  "scaled_features": [
+    "T2M",
+    "RH2M",
+    "DEWPOINT",
+    "PS",
+    "WS2M",
+    "WIND_U",
+    "WIND_V",
+    "PRECTOTCORR_log1p",
+    "ALLSKY_SFC_SW_DWN",
+    "T2M_lag_1h",
+    "T2M_lag_2h",
+    "T2M_lag_3h",
+    "T2M_lag_6h",
+    "T2M_lag_12h",
+    "T2M_lag_24h",
+    "T2M_roll_mean_24h",
+    "T2M_roll_min_24h",
+    "T2M_roll_max_24h",
+    "PS_diff_3h",
+    "PS_diff_24h",
+    "PRECTOTCORR_sum_24h_log1p",
+    "ALLSKY_sum_24h"
+  ],
+  "unscaled_features": [
+    "hour_sin",
+    "hour_cos",
+    "doy_sin",
+    "doy_cos"
+  ],
+  "scaler": "z-score, fit on split == 'train' only; parameters in scaler.json",
+  "splits": {
+    "train": [
+      "2001-01-01",
+      "2018-12-31 23:00"
+    ],
+    "val": [
+      "2019-01-01",
+      "2021-12-31 23:00"
+    ],
+    "test": [
+      "2022-01-01",
+      "2026-01-01 06:00"
+    ]
+  },
+  "split_counts": {
+    "train": 157698,
+    "test": 35047,
+    "val": 26280,
+    "none": 119
+  },
+  "split_ranges": {
+    "train": {
+      "rows": 157698,
+      "first_t": "2001-01-03 06:00:00+07:00",
+      "last_t": "2018-12-30 23:00:00+07:00"
+    },
+    "val": {
+      "rows": 26280,
+      "first_t": "2019-01-01 00:00:00+07:00",
+      "last_t": "2021-12-30 23:00:00+07:00"
+    },
+    "test": {
+      "rows": 35047,
+      "first_t": "2022-01-01 00:00:00+07:00",
+      "last_t": "2025-12-31 06:00:00+07:00"
+    }
+  },
+  "usage": "Use rows with split in {train,val,test}. 'none' rows are warm-up/purged/tail hours that remain only so LSTM/GRU windows can look back across them."
+}

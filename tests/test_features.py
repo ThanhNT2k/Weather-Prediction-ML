@@ -1,107 +1,89 @@
-"""Forecast alignment, causal features, quality filtering and schema integrity."""
-import csv
-from datetime import datetime, timedelta, timezone
-import hashlib
-import json
-from pathlib import Path
-import tempfile
+"""Features: causality, target alignment, split purging, train-only scaling, sequences."""
+
 import unittest
 
-from src.data_collection.nasa_power import LATITUDE, LONGITUDE
-from src.preprocessing.cleaning import clean
-from src.preprocessing.features import build_features, DERIVED_FEATURES
+import numpy as np
+import pandas as pd
+
+from src.preprocessing import features as feat
+from src.preprocessing.config import SEQ_LEN, TIMEZONE, VARS
+from src.preprocessing.sequences import make_sequences, tabular_xy
+
+
+def clean_frame(start="2018-12-20", end="2019-01-10 23:00"):
+    index = pd.date_range(start, end, freq="h", tz=TIMEZONE, name="timestamp")
+    n = len(index)
+    frame = pd.DataFrame({
+        "T2M": np.arange(n, dtype=float), "PRECTOTCORR": np.where(np.arange(n) % 5 == 0, 2.0, 0.0),
+        "RH2M": 80.0, "PS": 100 + np.arange(n) / 100, "WS2M": 2.0, "WD2M": 90.0, "ALLSKY_SFC_SW_DWN": 50.0,
+    }, index=index)
+    frame["is_inserted_hour"] = 0
+    frame["is_imputed"] = 0
+    return frame
 
 
 class FeatureTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        self.logs = self.root / "logs"
-        rows = []
-        start = datetime(2023, 1, 1, tzinfo=timezone.utc)
-        for i in range(72):
-            rows.append({"timestamp": (start + timedelta(hours=i)).isoformat(), "city": "Hanoi",
-                         "latitude": LATITUDE, "longitude": LONGITUDE, "T2M": i,
-                         "PRECTOTCORR": 0.1 if i % 2 else 0.2, "RH2M": 70,
-                         "PS": 100 + i / 10, "WS2M": 2, "WD2M": 90, "ALLSKY_SFC_SW_DWN": 100})
-        raw = self.root / "raw.csv"
-        with raw.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(rows[0]))
-            writer.writeheader()
-            writer.writerows(rows)
-        self.source, _ = clean(raw, self.root / "cleaned", min_rows=1, log_dir=self.logs)
+        self.clean = clean_frame()
+        self.ready, self.params, self.features = feat.build(self.clean)
 
-    def build(self, horizon=1):
-        path, report = build_features(self.source, self.root / "processed", horizon=horizon,
-                                      min_rows=1, log_dir=self.logs)
-        with path.open(newline="", encoding="utf-8") as f:
-            return list(csv.DictReader(f)), report
+    def test_targets_are_future_values(self):
+        row = self.features.iloc[100]
+        for h, name in zip(feat.HORIZONS, feat.TARGETS):
+            self.assertEqual(row[name], self.clean["T2M"].iloc[100 + h])
 
-    def change_source(self, callback):
-        with self.source.open(newline="", encoding="utf-8") as f:
-            rows = list(csv.DictReader(f))
-        callback(rows)
-        with self.source.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(rows[0]))
-            writer.writeheader()
-            writer.writerows(rows)
-        metadata_path = self.source.with_suffix(".metadata.json")
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        metadata["dataset_id"] = "sha256:" + hashlib.sha256(self.source.read_bytes()).hexdigest()
-        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    def test_features_only_use_past(self):
+        changed = self.clean.copy()
+        changed.iloc[101:, changed.columns.get_loc("T2M")] += 50  # change only the future
+        _, _, other = feat.build(changed)
+        self.assertTrue(np.allclose(self.features.iloc[100][feat.TABULAR_FEATURES].astype(float),
+                                    other.iloc[100][feat.TABULAR_FEATURES].astype(float)))
 
-    def test_alignment_rolling_local_time_and_threshold(self):
-        rows, report = self.build()
-        self.assertEqual(len(rows), 72 - 24 - 1)
-        first = rows[0]
-        self.assertEqual(first["timestamp"], "2023-01-02T07:00:00+07:00")
-        self.assertEqual(first["target_timestamp"], "2023-01-02T08:00:00+07:00")
-        for field, expected in {"hour": 7, "dayofweek": 0, "season": 0, "T2M_lag_1h": 23,
-                                "T2M_lag_24h": 0, "T2M_rolling_mean_3h": 23,
-                                "T2M_rolling_mean_24h": 12.5, "PS_diff_3h": 0.3,
-                                "target_temperature": 25, "rain_flag": 0}.items():
-            self.assertAlmostEqual(float(first[field]), expected)
-        self.assertEqual(rows[1]["rain_flag"], "1")
-        self.assertEqual(len(first), 35)
-        self.assertEqual(len(report["feature_columns"]), 21)
-        self.assertIn("SUCCEEDED", Path(report["audit_log"]).read_text(encoding="utf-8"))
+    def test_wind_vector_follows_meteorological_convention(self):
+        # Wind FROM the east (90°) blows towards the west: u < 0, v ≈ 0.
+        self.assertAlmostEqual(self.features["WIND_U"].iloc[0], -2.0)
+        self.assertAlmostEqual(self.features["WIND_V"].iloc[0], 0.0)
 
-    def test_future_changes_do_not_change_current_features(self):
-        before, _ = self.build()
-        def alter(rows):
-            for row in rows[25:]:
-                row["T2M"] = "99"
-        self.change_source(alter)
-        after, _ = self.build()
-        for key in ["T2M", *DERIVED_FEATURES]:
-            self.assertEqual(before[0][key], after[0][key])
-        self.assertNotEqual(before[0]["target_temperature"], after[0]["target_temperature"])
+    def test_cyclic_hour_makes_23h_close_to_0h(self):
+        at = self.features.between_time("23:00", "23:00").iloc[0]
+        nxt = self.features.between_time("00:00", "00:00").iloc[1]
+        self.assertLess(np.hypot(at.hour_sin - nxt.hour_sin, at.hour_cos - nxt.hour_cos), 0.3)
 
-    def test_imputed_windows_and_targets_excluded(self):
-        def alter(rows):
-            rows[30]["is_imputed"] = "1"
-            rows[30]["imputed_columns"] = "T2M"
-        self.change_source(alter)
-        rows, report = self.build()
-        self.assertEqual(report["quality_rows_removed"], 26)  # target at 30, then t=30..54
-        self.assertEqual(len(rows), 47 - 26)
+    def test_split_is_chronological_and_purged(self):
+        split = self.ready["split"]
+        train, val = split.index[split.eq("train")], split.index[split.eq("val")]
+        self.assertEqual(train[0], self.clean.index[SEQ_LEN - 1])  # warm-up removed
+        self.assertLessEqual(train[-1] + pd.Timedelta(hours=24), pd.Timestamp("2018-12-31 23:00", tz=TIMEZONE))
+        self.assertEqual(val[0], pd.Timestamp("2019-01-01", tz=TIMEZONE))
+        self.assertTrue(split.iloc[-24:].eq("none").all())  # no future label
 
-    def test_custom_horizon(self):
-        rows, _ = self.build(horizon=6)
-        self.assertEqual(len(rows), 42)
-        self.assertEqual(float(rows[0]["target_temperature"]), 30)
-        self.assertEqual(rows[0]["target_timestamp"], "2023-01-02T13:00:00+07:00")
+    def test_imputed_hour_removes_every_window_touching_it(self):
+        clean = self.clean.copy()
+        clean.iloc[200, clean.columns.get_loc("is_imputed")] = 1
+        ready, _, _ = feat.build(clean)
+        touched = ready["split"].iloc[200 - 24:200 + SEQ_LEN]
+        self.assertTrue(touched.eq("none").all())
+        self.assertNotEqual(ready["split"].iloc[200 + SEQ_LEN], "none")
 
-    def test_tamper_missing_hours_and_minimum_rows_rejected(self):
-        with self.assertRaisesRegex(ValueError, "minimum"):
-            build_features(self.source, self.root / "processed", log_dir=self.logs)
-        self.source.write_text(self.source.read_text(encoding="utf-8") + "\n", encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "hash"):
-            self.build()
-        self.change_source(lambda rows: rows.pop(30))
-        with self.assertRaisesRegex(ValueError, "continuous"):
-            self.build()
+    def test_scaler_fit_on_train_only(self):
+        train = self.ready.loc[self.ready["split"].eq("train"), feat.SCALED_FEATURES]
+        self.assertTrue(np.allclose(train.mean(), 0, atol=1e-9))
+        varying = self.features.loc[self.ready["split"].eq("train"), feat.SCALED_FEATURES].std(ddof=0) > 1e-9
+        self.assertTrue(np.allclose(train.loc[:, varying].std(ddof=0), 1, atol=1e-9))
+        raw_train = self.features.loc[self.ready["split"].eq("train"), "T2M"]
+        self.assertAlmostEqual(self.params["T2M"]["mean"], raw_train.mean())
+        self.assertTrue((self.ready[feat.UNSCALED_FEATURES] == self.features[feat.UNSCALED_FEATURES]).all().all())
+
+    def test_tabular_and_sequence_outputs(self):
+        X, y = tabular_xy(self.ready, "train")
+        self.assertEqual(list(X.columns), feat.TABULAR_FEATURES)
+        self.assertEqual(list(y.columns), feat.TARGETS)
+        Xs, ys, times = make_sequences(self.ready, "val", target_stats=(0.0, 1.0))
+        self.assertEqual(Xs.shape, (len(times), SEQ_LEN, len(feat.SEQUENCE_FEATURES)))
+        anchor = self.ready.index.get_loc(times[0])
+        expected = self.ready[feat.SEQUENCE_FEATURES].iloc[anchor - SEQ_LEN + 1:anchor + 1].to_numpy(np.float32)
+        self.assertTrue(np.allclose(Xs[0], expected))
+        self.assertTrue(np.allclose(ys, self.ready.loc[times, feat.TARGETS].to_numpy()))
 
 
 if __name__ == "__main__":

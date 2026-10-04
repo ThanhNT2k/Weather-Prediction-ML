@@ -1,191 +1,178 @@
-"""Build causal hourly features and future targets from cleaned Hanoi data."""
+"""Step 2 - features, multi-horizon targets, time split and scaling.
+
+python -m src.preprocessing.features
+
+Output is one continuous hourly table (scaled features + targets in °C + a
+`split` column), so the same rows serve Linear Regression (tabular columns)
+and LSTM/GRU (sliding windows over the sequence columns, see sequences.py).
+"""
 
 import argparse
-import csv
-from datetime import datetime, timedelta
 import hashlib
-import io
 import json
-import math
+from datetime import datetime, timezone
 from pathlib import Path
+
+import numpy as np
 import pandas as pd
-import pvlib
 
-from src.data_audit import DataAudit, DEFAULT_LOG_DIR, file_info
-from src.data_collection.nasa_power import PARAMETERS
-from src.preprocessing.cleaning import ROOT, STATION_ID, record_id, numeric_value, write_atomic
+from src.preprocessing.cleaning import load_cleaned
+from src.preprocessing.config import (CLEANED_DIR, HORIZONS, PROCESSED_DIR, REPORT_DIR, SEQ_LEN, SPLITS, STEM,
+                                      TEMPERATURE_LAGS, TIMEZONE, VARS)
 
-DEFAULT_INPUT = ROOT / "data/cleaned/nasa_power/hanoi_hourly_20010101_20251231_clean.csv"
-DEFAULT_OUTPUT = ROOT / "data/processed/nasa_power"
-SCHEMA_PATH = ROOT / "docs/data_schema.json"
-LOOKBACK = 24
-VERSION = "1.0"
-DERIVED_FEATURES = ["hour", "month", "dayofweek", "season", "T2M_lag_1h", "T2M_lag_24h",
-                    "PRECTOTCORR_lag_1h", "PRECTOTCORR_lag_24h", "PS_diff_3h",
-                    "T2M_rolling_mean_3h", "T2M_rolling_mean_24h", "PRECTOTCORR_rolling_sum_24h",
-                    "WD2M_sin", "WD2M_cos"]
-TARGETS = ["target_temperature", "target_rainfall", "rain_flag"]
+VERSION = "2.0"
+MODEL_READY = PROCESSED_DIR / "hanoi_t2m_model_ready.csv"
+SCALER_PATH = PROCESSED_DIR / "scaler.json"
+METADATA_PATH = PROCESSED_DIR / "hanoi_t2m_model_ready.metadata.json"
 
-# Tọa độ Hà Nội, Việt Nam dùng cho pvlib
-LATITUDE, LONGITUDE = 21.0278, 105.8342
+CYCLIC_FEATURES = ["hour_sin", "hour_cos", "doy_sin", "doy_cos"]
+# Per-hour inputs for LSTM/GRU: the network learns its own lags from the window.
+SEQUENCE_FEATURES = ["T2M", "RH2M", "DEWPOINT", "PS", "WS2M", "WIND_U", "WIND_V",
+                     "PRECTOTCORR_log1p", "ALLSKY_SFC_SW_DWN", *CYCLIC_FEATURES]
+# Linear Regression sees one row, so history must be given explicitly as columns.
+HISTORY_FEATURES = [*(f"T2M_lag_{k}h" for k in TEMPERATURE_LAGS),
+                    "T2M_roll_mean_24h", "T2M_roll_min_24h", "T2M_roll_max_24h",
+                    "PS_diff_3h", "PS_diff_24h", "PRECTOTCORR_sum_24h_log1p", "ALLSKY_sum_24h"]
+TABULAR_FEATURES = [*SEQUENCE_FEATURES, *HISTORY_FEATURES]
+TARGETS = [f"T2M_t+{h}h" for h in HORIZONS]
+# Already bounded in [-1, 1]; scaling them would only blur their meaning.
+UNSCALED_FEATURES = list(CYCLIC_FEATURES)
+SCALED_FEATURES = [c for c in TABULAR_FEATURES if c not in UNSCALED_FEATURES]
 
 
-def build_features(input_path=DEFAULT_INPUT, output_dir=DEFAULT_OUTPUT, horizon=1,
-                    min_rows=10000, log_dir=DEFAULT_LOG_DIR):
-    with DataAudit("features", {"input": str(input_path), "output_dir": str(output_dir),
-                               "horizon_hours": horizon, "lookback_hours": LOOKBACK,
-                               "min_rows": min_rows, "version": VERSION}, __file__, log_dir) as audit:
-        if not isinstance(horizon, int) or horizon < 1 or min_rows < 1:
-            raise ValueError("horizon and min_rows must be positive integers")
-        input_path, output_dir = Path(input_path).resolve(), Path(output_dir).resolve()
-        if any(output_dir.is_relative_to(ROOT / "data" / name) for name in ("raw", "cleaned")):
-            raise ValueError("Features cannot be written into raw or cleaned data")
-        raw_bytes = input_path.read_bytes()
-        source_hash = hashlib.sha256(raw_bytes).hexdigest()
-        metadata_path = input_path.with_suffix(".metadata.json")
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        if metadata["dataset_id"] != f"sha256:{source_hash}":
-            raise ValueError("Cleaned CSV hash does not match its metadata")
-        audit.event("INPUT", "Đọc dữ liệu sạch và xác minh hash metadata", **file_info(input_path))
-        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-        reader = csv.DictReader(io.StringIO(raw_bytes.decode("utf-8-sig")))
-        fields = reader.fieldnames or []
-        expected_cleaned = [field["name"] for field in schema["fields"] if field["stage"] == "cleaned"]
-        if fields != expected_cleaned:
-            raise ValueError("Cleaned CSV columns do not match docs/data_schema.json")
-        
-        rows = list(reader)
-        
-        # 1. Tính toán trước mảng xác định thời điểm ban đêm bằng pvlib cho toàn bộ timestamps
-        timestamps_list = [datetime.fromisoformat(row["timestamp"]) for row in rows]
-        # Convert timestamps to timezone-aware DatetimeIndex. If already tz-aware, convert; otherwise localize.
-        tz_index = pd.DatetimeIndex(timestamps_list)
-        if tz_index.tz is None:
-            tz_times = tz_index.tz_localize("Asia/Ho_Chi_Minh")
-        else:
-            tz_times = tz_index.tz_convert("Asia/Ho_Chi_Minh")
-        solar_position = pvlib.solarposition.get_solarposition(tz_times, LATITUDE, LONGITUDE)
-        # Góc thiên đỉnh > 90 độ đồng nghĩa mặt trời đã lặn dưới đường chân trời (ban đêm)
-        is_night_array = solar_position["apparent_zenith"] > 90
+def dewpoint(temperature, humidity):
+    """Magnus formula (Alduchov & Eskridge 1996), °C."""
+    a, b = 17.625, 243.04
+    gamma = np.log(humidity.clip(lower=1) / 100) + a * temperature / (b + temperature)
+    return b * gamma / (a - gamma)
 
-        times, values = [], []
-        ids = set()
-        for i, row in enumerate(rows):
-            stamp = timestamps_list[i]
-            if stamp.utcoffset() != timedelta(hours=7) or stamp.minute or stamp.second or stamp.microsecond:
-                raise ValueError("Cleaned timestamps must be exact hours in GMT+7")
-            if times and stamp - times[-1] != timedelta(hours=1):
-                raise ValueError("Cleaned data must be sorted, unique and continuous hourly")
-            if row["station_id"] != STATION_ID or row["record_id"] != record_id(row["timestamp"]):
-                raise ValueError("Invalid station or record identity")
-            if row["record_id"] in ids:
-                raise ValueError("Duplicate record_id")
-            ids.add(row["record_id"])
-            for key in ("is_imputed", "is_inserted_hour"):
-                if row[key] not in ("0", "1"):
-                    raise ValueError(f"Invalid quality flag {key}")
-            if (row["is_imputed"] == "0") != (row["imputed_columns"] == "none"):
-                raise ValueError("Inconsistent imputed_columns flag")
-            
-            observation = {key: numeric_value(row[key], key, {-999.0}) for key in PARAMETERS}
-            
-            # 2. Tự động ép bức xạ mặt trời về 0 nếu xác định là ban đêm
-            if is_night_array.iloc[i] and "ALLSKY_SFC_SW_DWN" in observation:
-                observation["ALLSKY_SFC_SW_DWN"] = 0.0
 
-            if any(value is None for value in observation.values()):
-                raise ValueError("Cleaned data contains invalid meteorological values")
-            times.append(stamp)
-            values.append(observation)
+def add_features(clean):
+    """Every feature at row t uses only hours <= t (no look-ahead)."""
+    df = clean[VARS].copy()
+    df["DEWPOINT"] = dewpoint(df["T2M"], df["RH2M"])
+    # Meteorological convention: WD2M is where the wind blows FROM, so the
+    # vector points the opposite way. u > 0 = towards east, v > 0 = towards north.
+    radians = np.deg2rad(df["WD2M"])
+    df["WIND_U"] = -df["WS2M"] * np.sin(radians)
+    df["WIND_V"] = -df["WS2M"] * np.cos(radians)
+    df["PRECTOTCORR_log1p"] = np.log1p(df["PRECTOTCORR"])
 
-        if len(rows) <= LOOKBACK + horizon:
-            raise ValueError("Not enough observations for lookback and horizon")
-        rejected_quality = 0
-        output = []
-        for index in range(LOOKBACK, len(rows) - horizon):
-            future = index + horizon
-            affected = rows[index - LOOKBACK:index + 1] + [rows[future]]
-            if any(row["is_imputed"] == "1" or row["is_inserted_hour"] == "1" for row in affected):
-                rejected_quality += 1
-                continue
-            stamp, current = times[index], values[index]
-            derived = {
-                "hour": stamp.hour, "month": stamp.month, "dayofweek": stamp.weekday(),
-                "season": (stamp.month % 12) // 3,  # 0 winter, 1 spring, 2 summer, 3 autumn
-                "T2M_lag_1h": values[index - 1]["T2M"],
-                "T2M_lag_24h": values[index - 24]["T2M"],
-                "PRECTOTCORR_lag_1h": values[index - 1]["PRECTOTCORR"],
-                "PRECTOTCORR_lag_24h": values[index - 24]["PRECTOTCORR"],
-                "PS_diff_3h": current["PS"] - values[index - 3]["PS"],
-                "T2M_rolling_mean_3h": sum(v["T2M"] for v in values[index - 2:index + 1]) / 3,
-                "T2M_rolling_mean_24h": sum(v["T2M"] for v in values[index - 23:index + 1]) / 24,
-                "PRECTOTCORR_rolling_sum_24h": sum(v["PRECTOTCORR"] for v in values[index - 23:index + 1]),
-                "WD2M_sin": math.sin(math.radians(current["WD2M"])),
-                "WD2M_cos": math.cos(math.radians(current["WD2M"])),
-            }
-            output.append({**rows[index], **derived, "target_timestamp": times[future].isoformat(),
-                            "target_temperature": values[future]["T2M"],
-                            "target_rainfall": values[future]["PRECTOTCORR"],
-                            "rain_flag": int(values[future]["PRECTOTCORR"] > 0.1)})
-        
-        audit.event("TRANSFORMED", "Tạo đặc trưng từ dữ liệu đến t và nhãn tại t+h; loại mẫu không đủ điều kiện",
-                    input_rows=len(rows), warmup_rows=LOOKBACK, missing_future_rows=horizon,
-                    rejected_imputed_windows_or_targets=rejected_quality, output_rows=len(output),
-                    horizon_hours=horizon, feature_columns=[*PARAMETERS, *DERIVED_FEATURES],
-                    target_columns=TARGETS, rain_threshold_mm_per_hour=0.1)
-        
-        if len(output) < min_rows:
-            raise ValueError(f"Only {len(output)} valid feature rows; minimum is {min_rows}")
-        
-        output_fields = fields + DERIVED_FEATURES + ["target_timestamp", *TARGETS]
-        if output_fields != [field["name"] for field in schema["fields"]]:
-            raise ValueError("Output columns do not match data schema")
-        
-        stream = io.StringIO(newline="")
-        writer = csv.DictWriter(stream, fieldnames=output_fields)
-        writer.writeheader()
-        writer.writerows(output)
-        content = stream.getvalue()
-        csv_path = output_dir / f"{input_path.stem.removesuffix('_clean')}_features_{horizon}h.csv"
-        
-        if csv_path.resolve() == input_path:
-            raise ValueError("Cannot overwrite input")
-        
-        report = {
-            "dataset_id": "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest(),
-            "feature_version": VERSION, "schema_version": schema["version"],
-            "source": file_info(input_path), "source_metadata": file_info(metadata_path),
-            "schema": file_info(SCHEMA_PATH), "horizon_hours": horizon,
-            "lookback_hours": LOOKBACK, "time_standard": "UTC+07:00",
-            "input_rows": len(rows), "output_rows": len(output), "warmup_rows_removed": LOOKBACK,
-            "missing_future_rows_removed": horizon, "quality_rows_removed": rejected_quality,
-            "feature_columns": [*PARAMETERS, *DERIVED_FEATURES], "target_columns": TARGETS,
-            "start": output[0]["timestamp"], "end": output[-1]["timestamp"],
-            "target_end": output[-1]["target_timestamp"],
-            "audit_run_id": audit.run_id, "audit_log": str(audit.path),
-            "assumption": "All observations through t are available; historical backtesting, not real-time NASA availability.",
-            "split_rule": "Split by time; require train target_timestamp < validation start and validation target_timestamp < test start. Never random split.",
-        }
-        
-        output_dir.mkdir(parents=True, exist_ok=True)
-        for path, text in ((csv_path, content), (csv_path.with_suffix(".metadata.json"), json.dumps(report, ensure_ascii=False, indent=2))):
-            audit.event("WRITE_PLANNED", "Chuẩn bị ghi dữ liệu đặc trưng hoặc metadata", previous_output=file_info(path))
-            write_atomic(path, text)
-            audit.event("WRITTEN", "Đã ghi file", **file_info(path))
-        return csv_path, report
+    hour = df.index.hour
+    day = df.index.dayofyear - 1 + hour / 24
+    df["hour_sin"], df["hour_cos"] = np.sin(2 * np.pi * hour / 24), np.cos(2 * np.pi * hour / 24)
+    df["doy_sin"], df["doy_cos"] = np.sin(2 * np.pi * day / 365.25), np.cos(2 * np.pi * day / 365.25)
+
+    for k in TEMPERATURE_LAGS:
+        df[f"T2M_lag_{k}h"] = df["T2M"].shift(k)
+    window = df["T2M"].rolling(24, min_periods=24)
+    df["T2M_roll_mean_24h"], df["T2M_roll_min_24h"], df["T2M_roll_max_24h"] = window.mean(), window.min(), window.max()
+    df["PS_diff_3h"] = df["PS"].diff(3)
+    df["PS_diff_24h"] = df["PS"].diff(24)
+    df["PRECTOTCORR_sum_24h_log1p"] = np.log1p(df["PRECTOTCORR"].rolling(24, min_periods=24).sum())
+    df["ALLSKY_sum_24h"] = df["ALLSKY_SFC_SW_DWN"].rolling(24, min_periods=24).sum()
+
+    for h, name in zip(HORIZONS, TARGETS):
+        df[name] = df["T2M"].shift(-h)
+    return df
+
+
+def assign_split(df, quality_bad):
+    """Label each forecast time t as train / val / test / none.
+
+    A row is a usable sample only if its whole span [t-SEQ_LEN+1, t+max(h)]
+    is real (no inserted/interpolated hour) and every feature/target exists.
+    Rows whose t+24h target falls into the next period are purged, so no
+    target value is shared between two splits.
+    """
+    max_h = max(HORIZONS)
+    bad = quality_bad.astype(int)
+    bad_past = bad.rolling(SEQ_LEN, min_periods=SEQ_LEN).max().fillna(1).astype(bool)
+    bad_future = bad[::-1].rolling(max_h, min_periods=1).max()[::-1].shift(-1).fillna(1).astype(bool)
+    complete = df[[*TABULAR_FEATURES, *TARGETS]].notna().all(axis=1)
+    usable = complete & ~bad_past & ~bad_future
+
+    split = pd.Series("none", index=df.index)
+    target_time = df.index + pd.Timedelta(hours=max_h)
+    for name, (start, end) in SPLITS.items():
+        start, end = pd.Timestamp(start, tz=TIMEZONE), pd.Timestamp(end, tz=TIMEZONE)
+        inside = (df.index >= start) & (target_time <= end)
+        split[usable & inside] = name
+    return split
+
+
+def fit_scaler(df, split):
+    """z-score parameters from TRAIN rows only (val/test must stay unseen)."""
+    train = df.loc[split.eq("train"), SCALED_FEATURES]
+    std = train.std(ddof=0).mask(lambda s: s < 1e-9, 1.0)  # a constant column stays constant instead of dividing by 0
+    params = {c: {"mean": float(train[c].mean()), "std": float(std[c])} for c in SCALED_FEATURES}
+    params["__target__"] = {"mean": float(df.loc[split.eq("train"), "T2M"].mean()),
+                            "std": float(df.loc[split.eq("train"), "T2M"].std(ddof=0)),
+                            "columns": TARGETS, "note": "Targets are stored in °C; use for LSTM/GRU target scaling."}
+    return params
+
+
+def apply_scaler(df, params):
+    out = df.copy()
+    for c in SCALED_FEATURES:
+        out[c] = (out[c] - params[c]["mean"]) / params[c]["std"]
+    return out
+
+
+def build(clean):
+    """clean (hourly, local time) -> (model_ready, scaler params, unscaled features)."""
+    features = add_features(clean)
+    quality_bad = clean["is_inserted_hour"].eq(1) | clean["is_imputed"].eq(1) | clean[VARS].isna().any(axis=1)
+    features["split"] = assign_split(features, quality_bad)
+    params = fit_scaler(features, features["split"])
+    scaled = apply_scaler(features, params)
+    model_ready = scaled[["split", *TABULAR_FEATURES, *TARGETS]]
+    return model_ready, params, features
+
+
+def summarize(model_ready):
+    counts = model_ready["split"].value_counts().to_dict()
+    ranges = {}
+    for name in SPLITS:
+        part = model_ready.index[model_ready["split"].eq(name)]
+        ranges[name] = {"rows": int(len(part)), "first_t": str(part.min()), "last_t": str(part.max())}
+    return {k: int(v) for k, v in counts.items()}, ranges
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--horizon", type=int, default=1)
-    parser.add_argument("--min-rows", type=int, default=10000)
-    parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
+    parser.add_argument("--input", type=Path, default=CLEANED_DIR / f"{STEM}_clean.csv")
+    parser.add_argument("--output-dir", type=Path, default=PROCESSED_DIR)
     args = parser.parse_args()
-    # Directly run feature building; let any exception propagate for a full traceback
-    path, report = build_features(args.input, args.output_dir, args.horizon, args.min_rows, args.log_dir)
-    print(json.dumps({"output": str(path), "rows": report["output_rows"], "audit_log": report["audit_log"]}, indent=2))
+    model_ready, params, _ = build(load_cleaned(args.input))
+    counts, ranges = summarize(model_ready)
+
+    out_dir = args.output_dir.resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = out_dir / MODEL_READY.name
+    table = model_ready.reset_index()
+    table["timestamp"] = table["timestamp"].map(lambda t: t.isoformat())
+    table.to_csv(csv_path, index=False, float_format="%.6g")
+    (out_dir / SCALER_PATH.name).write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
+    metadata = {
+        "version": VERSION, "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": str(args.input.resolve()), "sha256": hashlib.sha256(csv_path.read_bytes()).hexdigest(),
+        "timezone": TIMEZONE, "rows": len(table), "horizons_hours": HORIZONS, "seq_len": SEQ_LEN,
+        "targets": TARGETS, "target_unit": "°C (unscaled)",
+        "sequence_features": SEQUENCE_FEATURES, "tabular_features": TABULAR_FEATURES,
+        "scaled_features": SCALED_FEATURES, "unscaled_features": UNSCALED_FEATURES,
+        "scaler": "z-score, fit on split == 'train' only; parameters in scaler.json",
+        "splits": SPLITS, "split_counts": counts, "split_ranges": ranges,
+        "usage": "Use rows with split in {train,val,test}. 'none' rows are warm-up/purged/tail hours that "
+                 "remain only so LSTM/GRU windows can look back across them.",
+    }
+    text = json.dumps(metadata, ensure_ascii=False, indent=2)
+    (out_dir / METADATA_PATH.name).write_text(text, encoding="utf-8")
+    if out_dir == PROCESSED_DIR.resolve():
+        REPORT_DIR.mkdir(parents=True, exist_ok=True)
+        (REPORT_DIR / "features_report.json").write_text(text, encoding="utf-8")
+        (REPORT_DIR / "scaler.json").write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps({"output": str(csv_path), "split_counts": counts}, indent=2))
 
 
 if __name__ == "__main__":
