@@ -232,14 +232,38 @@ Code: [src/preprocessing/features.py](src/preprocessing/features.py). Nguyên t�
 
 ### 7.1. Hướng gió → vector gió (u, v)
 
-**Vấn đề.** `WD2M` là một **góc**. Về bản chất 359° và 1° chỉ lệch 2°, nhưng với mô hình chúng là hai số cách nhau 358 — mô hình tuyến tính sẽ coi gió Bắc-hơi-Tây và gió Bắc-hơi-Đông là hai thái cực đối lập, còn 180° (gió Nam) nằm "ở giữa" chúng. Không phép chuẩn hóa tuyến tính nào sửa được điều này vì vấn đề nằm ở **topo** (đường thẳng so với vòng tròn).
+**Vấn đề.** `WD2M` là một **góc** đo theo la bàn: 0° = Bắc, 90° = Đông, 180° = Nam, 270° = Tây, tăng theo chiều kim đồng hồ. Về bản chất 359° và 1° chỉ lệch 2° (đều gần như gió Bắc), nhưng với mô hình chúng là hai số cách nhau 358. Mô hình tuyến tính sẽ coi chúng là hai thái cực đối lập, còn 180° (gió Nam, ngược hẳn) lại nằm "ở giữa". Chuẩn hóa tuyến tính (z-score, min-max) không sửa được, vì nó chỉ co giãn một đường thẳng, còn góc thì nằm trên **vòng tròn**.
 
-**Có hai cách mã hóa vòng tròn:**
+**Công thức:**
 
-1. `sin(WD)`, `cos(WD)`: đặt góc lên vòng tròn đơn vị → 359° và 1° gần nhau (khoảng cách 0,03 thay vì 358).
-2. **Vector gió** `u = −WS·sin(WD)`, `v = −WS·cos(WD)`: như cách 1 nhưng nhân với tốc độ gió. Dấu trừ vì hướng gió khí tượng là hướng gió **thổi đến từ**; `u > 0` = gió đi về phía Đông, `v > 0` = gió đi về phía Bắc.
+$$u = -\,WS \cdot \sin(WD), \qquad v = -\,WS \cdot \cos(WD)$$
 
-**Chọn cách 2**, vì khi gió lặng (4,2% số giờ có WS < 0,5 m/s) hướng gió gần như ngẫu nhiên — trung bình đổi 35° mỗi giờ, so với ~5° khi gió mạnh (biểu đồ 6, panel phải). Với sin/cos, hướng nhiễu đó vẫn nặng ngang hướng của gió bão. Với (u, v), gió lặng tự động ≈ (0, 0). Đây cũng là cách biểu diễn gió chuẩn trong khí tượng học.
+Có thể đọc công thức theo 3 bước:
+
+1. **Đặt góc lên vòng tròn.** Hướng la bàn θ ứng với một điểm trên vòng tròn đơn vị có tọa độ (Đông, Bắc) = (sin θ, cos θ). La bàn đo từ trục Bắc nên thành phần Đông dùng `sin`, thành phần Bắc dùng `cos` (ngược với lượng giác ở trường, nơi góc đo từ trục Đông).
+2. **Nhân với tốc độ `WS`.** Độ dài mũi tên chính là tốc độ gió, nên kết quả là vector vận tốc gió (m/s), có cả hướng lẫn độ lớn.
+3. **Dấu trừ.** Theo quy ước khí tượng, `WD` là hướng gió **thổi đến từ**. "Gió Bắc" (WD = 0°) thổi từ Bắc **về phía Nam**, nên mũi tên phải quay ngược 180°, mà sin(θ+180°) = −sin θ và cos(θ+180°) = −cos θ.
+
+Kết quả: `u` là thành phần gió đi về phía **Đông** (u < 0 nghĩa là đi về phía Tây), `v` là thành phần gió đi về phía **Bắc** (v < 0 nghĩa là đi về phía Nam).
+
+| Gió | WS (m/s) | WD | u | v | Đọc là |
+|---|---|---|---|---|---|
+| Bắc | 3 | 0° | 0 | −3,00 | thổi về phía Nam |
+| Đông Bắc (gió mùa đông) | 4 | 45° | −2,83 | −2,83 | thổi về Tây Nam |
+| Đông | 3 | 90° | −3,00 | 0 | thổi về phía Tây |
+| Đông Nam (gió mùa hạ) | 2 | 135° | −1,41 | +1,41 | thổi về Tây Bắc |
+| Nam | 3 | 180° | 0 | +3,00 | thổi về phía Bắc |
+| Tây | 3 | 270° | +3,00 | 0 | thổi về phía Đông |
+| **Bắc lệch Tây** | 3 | **359°** | +0,05 | −3,00 | gần như gió Bắc |
+| **Bắc lệch Đông** | 3 | **1°** | −0,05 | −3,00 | gần như gió Bắc |
+
+**Vì sao công thức này giải quyết được vấn đề:**
+
+- **359° và 1°:** số gốc cách nhau 358. Hai vector (+0,05; −3,00) và (−0,05; −3,00) chỉ cách nhau **0,10 m/s**. Không còn "điểm cắt" ở 0°/360°: góc quay liên tục thì (u, v) cũng thay đổi liên tục.
+- **Khoảng cách giữa hai trạng thái gió** theo định lý cos là `√(WS₁² + WS₂² − 2·WS₁·WS₂·cos Δθ)`. Một con số gộp cả chênh lệch tốc độ lẫn chênh lệch góc, đúng với trực giác: cùng hướng, cùng tốc độ thì "gần nhau".
+- **Gió lặng tự mất trọng số.** Khi gió gần như lặng (4,2% số giờ có WS < 0,5 m/s), hướng gió gần như ngẫu nhiên: trung bình đổi 35° mỗi giờ, so với khoảng 5° khi gió mạnh (biểu đồ 6, panel phải). Với (u, v), gió 0,2 m/s từ Bắc và gió 0,2 m/s từ Nam chỉ cách nhau 0,4. Nếu chỉ dùng (sin WD, cos WD), hai hướng này cách nhau 2,0, mức xa nhất có thể, dù cả hai thực chất đều là "gần như không có gió". Vì vậy chọn vector gió thay vì chỉ sin/cos. Đây cũng là cách biểu diễn gió chuẩn trong khí tượng học.
+- **Không mất thông tin:** dựng lại được `WS = √(u² + v²)` và `WD = atan2(−u, −v) mod 360°`.
+- Kiểm tra với dữ liệu: trên tập train, trung bình u = −0,75 và v = +0,14. Nghĩa là gió Hà Nội chủ yếu có thành phần đi về phía Tây, tức thổi từ phía Đông (Đông Bắc vào mùa đông, Đông Nam vào mùa hạ), khớp với hoa gió.
 
 **Có đáng giữ hướng gió không?** Có: hoa gió (biểu đồ 7) cho thấy gió mùa Đông Bắc mang không khí lạnh vào mùa đông, gió Đông Nam ẩm vào mùa hạ — hướng gió báo hiệu khối khí sắp tới, rất có ích cho horizon 12–24h. `WS2M` vẫn được giữ riêng vì cường độ gió ảnh hưởng xáo trộn nhiệt bất kể hướng. Cột `WD2M` gốc **không** đưa vào mô hình.
 
@@ -248,14 +272,63 @@ Code: [src/preprocessing/features.py](src/preprocessing/features.py). Nguyên t�
 
 ### 7.2. Giờ trong ngày và ngày trong năm → sin/cos
 
-- `hour_sin = sin(2π·giờ/24)`, `hour_cos = cos(2π·giờ/24)`; `doy_sin/doy_cos` tương tự với chu kỳ 365,25 ngày.
-- **Vì sao:** cùng vấn đề vòng tròn như hướng gió: 23h và 0h liền nhau nhưng là hai số 23 và 0; 31/12 và 01/01 liền nhau nhưng là 365 và 1. Một cặp (sin, cos) — không phải chỉ sin — vì sin một mình cho 6h và 18h cùng giá trị.
+**Vấn đề.** Giờ chạy 0, 1, …, 23 rồi quay về 0. 23h và 0h chỉ cách nhau 1 giờ, nhưng ở dạng số thì cách nhau 23. Ngày trong năm cũng vậy: 31/12 (ngày 365) và 01/01 (ngày 1) liền nhau nhưng cách nhau 364.
+
+**Công thức:** coi 24 giờ là một vòng tròn 360°, mỗi giờ quay 15°. Với h là giờ Việt Nam (0–23):
+
+$$\text{hour\_sin} = \sin\left(\frac{2\pi h}{24}\right), \qquad \text{hour\_cos} = \cos\left(\frac{2\pi h}{24}\right)$$
+
+Mỗi giờ thành một điểm trên vòng tròn, giống mặt đồng hồ 24 giờ:
+
+| Giờ h | Góc | hour_sin | hour_cos |
+|---|---|---|---|
+| 0h | 0° | 0 | 1 |
+| 3h | 45° | 0,707 | 0,707 |
+| 6h | 90° | 1 | 0 |
+| 9h | 135° | 0,707 | −0,707 |
+| 12h | 180° | 0 | −1 |
+| 15h | 225° | −0,707 | −0,707 |
+| 18h | 270° | −1 | 0 |
+| 23h | 345° | −0,259 | 0,966 |
+
+- **Khoảng cách giữa hai giờ** bằng `2·sin(π·Δh/24)`. Hai giờ liền nhau luôn cách nhau 0,26, dù là 13h–14h hay 23h–0h. Hai giờ đối nhau (0h và 12h) cách nhau xa nhất, bằng 2. Khoảng cách trên mặt đồng hồ được giữ đúng.
+- **Vì sao cần cả sin lẫn cos:** chỉ có `sin` thì 3h và 9h cùng bằng 0,707, 0h và 12h cùng bằng 0. Chỉ có `cos` thì 6h và 18h cùng bằng 0. Cần cả cặp thì mỗi giờ mới có vị trí riêng.
+- **Lợi ích cho Linear Regression:** mô hình học `β₁·sin + β₂·cos`, mà tổng này luôn viết được thành `A·sin(2πh/24 + φ)`, tức một đường cong ngày–đêm có **biên độ A và giờ đỉnh φ do mô hình tự học**. Hồi quy T2M chỉ trên hai cột này với dữ liệu thật cho ra đỉnh nhiệt lúc **13h39** và biên độ ±3,9°C, khớp với biểu đồ 3 (đỉnh 13–14h). Nếu dùng cột `hour` dạng số, mô hình tuyến tính chỉ vẽ được một đường thẳng tăng đều từ 0h đến 23h, không thể có đỉnh lúc trưa.
+- **Ngày trong năm** dùng cùng ý tưởng, chu kỳ 365,25 ngày (phần 0,25 để tính năm nhuận), cộng thêm phần giờ để giá trị tăng mượt trong ngày. Với d là ngày thứ mấy trong năm (1–366):
+
+$$\text{doy\_sin} = \sin\left(\frac{2\pi\,(d - 1 + h/24)}{365{,}25}\right), \qquad \text{doy\_cos} = \cos\left(\frac{2\pi\,(d - 1 + h/24)}{365{,}25}\right)$$
+
+  `doy_cos` ≈ +1 vào đầu tháng 1 (giữa mùa đông) và ≈ −1 vào đầu tháng 7 (giữa mùa hạ), nên tương quan −0,73 với nhiệt độ (biểu đồ 11).
 - **Không dùng** cột số `month`, `dayofweek`, `season` dạng số nguyên của pipeline cũ: `month` có lỗi 12→1 như trên; `season` (0–3) áp thứ tự giả cho các mùa; `dayofweek` không có cơ chế vật lý nào làm thứ Hai nóng hơn Chủ nhật — chỉ thêm nhiễu.
 
 ### 7.3. Lượng mưa → log1p
 
-- `PRECTOTCORR_log1p = log(1 + mưa)`.
-- **Vì sao:** phân phối lệch phải cực mạnh (46% giờ bằng 0, max 30,9 mm/giờ, skew 8,3). Với hồi quy tuyến tính, vài giờ mưa cực lớn chi phối hệ số; với LSTM/GRU, chúng gây gradient lớn. `log1p` giữ 0 → 0 (không như `log`), giảm skew xuống 3,3 và vẫn giữ thứ tự.
+**Vấn đề.** Phân phối mưa lệch phải cực mạnh: 46% số giờ bằng 0, trung bình 0,19 mm/giờ nhưng max 30,9 mm/giờ, skew 8,3 (biểu đồ 2).
+
+**Công thức** (x là lượng mưa, mm/giờ):
+
+$$\text{PRECTOTCORR\_log1p} = \ln(1 + x), \qquad \text{đảo ngược: } x = e^{y} - 1$$
+
+| Mưa x (mm/giờ) | 0 | 0,1 | 0,5 | 1 | 2 | 5 | 10 | 30,9 (max) |
+|---|---|---|---|---|---|---|---|---|
+| ln(1 + x) | 0 | 0,095 | 0,405 | 0,693 | 1,099 | 1,792 | 2,398 | 3,463 |
+
+**Đọc bảng:**
+
+- **Mưa nhỏ gần như giữ nguyên:** khi x nhỏ thì ln(1 + x) ≈ x (0,1 → 0,095), nên vẫn phân biệt rõ "không mưa" và "mưa phùn".
+- **Mưa lớn bị nén mạnh:** từ 10 lên 30,9 mm (gấp 3 lần) chỉ tăng từ 2,40 lên 3,46. Trước biến đổi, giờ mưa lớn nhất gấp **162 lần** giá trị trung bình; sau biến đổi chỉ còn **27 lần**. Skew giảm từ 8,3 xuống 3,3.
+- **Vì sao phải "+1":** 46% số giờ có mưa = 0, mà ln(0) = −∞. Cộng 1 trước khi lấy log thì 0 → 0, không cần xử lý riêng.
+- **Thứ tự được giữ:** mưa nhiều hơn thì giá trị log lớn hơn, và có thể đảo ngược bằng `e^y − 1`.
+
+**Vì sao cần biến đổi:**
+
+1. **Linear Regression:** vài chục giờ mưa cực lớn có "đòn bẩy" (leverage) rất cao. Vì sai số được bình phương, chúng kéo hệ số của biến mưa về phía mình, làm mô hình khớp kém hơn với 99% số giờ còn lại.
+2. **LSTM/GRU:** giá trị lớn đột ngột tạo gradient lớn, làm huấn luyện kém ổn định.
+3. **Ý nghĩa vật lý:** ảnh hưởng của mưa lên nhiệt độ có tính **bão hòa**. Mưa 10 hay 30 mm/giờ đều có nghĩa là trời đầy mây và mưa làm mát. Khác biệt quan trọng nhất là giữa "không mưa" và "có mưa", đúng vùng mà log giữ độ phân giải cao.
+4. **Chỉ z-score là không đủ:** z-score là phép biến đổi tuyến tính, chỉ dời và co giãn chứ **không đổi hình dạng** phân phối, nên skew vẫn là 8,3. Phải biến đổi phi tuyến trước rồi mới chuẩn hóa.
+5. **Vì sao chọn log1p chứ không chọn Box-Cox/Yeo-Johnson:** log1p không có tham số phải ước lượng từ dữ liệu, nên không có nguy cơ rò rỉ, lại dễ giải thích và dễ đảo ngược. Box-Cox không dùng được với giá trị 0.
+
+Thứ tự áp dụng cho mưa: **log1p → z-score (fit trên train)**. Cột `PRECTOTCORR_sum_24h_log1p` cũng vậy: cộng mưa 24 giờ theo mm trước, rồi mới lấy log1p.
 
 ![log1p](outputs/figures/08_bien_doi_luong_mua.png)
 
