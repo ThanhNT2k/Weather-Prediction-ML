@@ -1,51 +1,55 @@
-# Định nghĩa các trường dữ liệu mô hình — Hà Nội
+# Từ điển dữ liệu mô hình — dự báo T2M t+1h/6h/12h/24h
 
-Định nghĩa máy đọc được: [data_schema.json](data_schema.json). Bảng dưới liệt kê đầy đủ 35 cột, gồm 17 cột giữ từ cleaned, 14 đặc trưng mới và 4 cột thời gian/nhãn tương lai. Không cột nào được để thiếu trong CSV processed.
+File: `data/processed/nasa_power/hanoi_t2m_model_ready.csv` (tạo bởi `python -m src.preprocessing.features`). Bảng liên tục theo giờ, 219.144 dòng × 32 cột. Danh sách cột máy đọc được nằm trong `hanoi_t2m_model_ready.metadata.json` (`sequence_features`, `tabular_features`, `targets`). Lý do của từng đặc trưng: [README mục 7](../README.md#7-bước-4--tạo-đặc-trưng-và-nhãn).
 
-| Trường | Kiểu | Vai trò | Đơn vị | Định nghĩa |
-|---|---|---|---|---|
-| `record_id` | string | identifier | - | UUID5 của điểm lấy dữ liệu và thời điểm UTC; giữ nguyên từ cleaned. |
-| `station_id` | string | identifier | - | Định danh điểm NASA POWER Hà Nội. |
-| `timestamp` | string | time | - | Thời điểm dự báo t, ISO 8601 với +07:00. |
-| `city` | string | identifier | - | Tên thành phố: Hanoi. |
-| `latitude` | float | location | degree | Tọa độ điểm lấy dữ liệu; không đưa vào feature mặc định vì chỉ có một điểm Hà Nội. |
-| `longitude` | float | location | degree | Tọa độ điểm lấy dữ liệu; không đưa vào feature mặc định vì chỉ có một điểm Hà Nội. |
-| `T2M` | float | feature | °C | Nhiệt độ tại t. |
-| `PRECTOTCORR` | float | feature | mm/hour | Lượng mưa theo giờ tại t. |
-| `RH2M` | float | feature | % | Độ ẩm tương đối tại t. |
-| `PS` | float | feature | kPa | Áp suất bề mặt tại t. |
-| `WS2M` | float | feature | m/s | Tốc độ gió 2 m tại t. |
-| `WD2M` | float | feature | degree | Hướng gió 2 m tại t, [0,360). |
-| `ALLSKY_SFC_SW_DWN` | float | feature | Wh/m² | Bức xạ sóng ngắn tại t. |
-| `is_imputed` | int | provenance | - | 1 nếu dòng có ô được điền, ngược lại 0. |
-| `imputed_columns` | string | provenance | - | Danh sách biến được điền, phân cách bằng dấu \|; none nếu không có. |
-| `is_inserted_hour` | int | provenance | - | 1 nếu giờ được bổ sung, ngược lại 0. |
-| `source_row_numbers` | string | provenance | - | Số thứ tự bản ghi nguồn, phân cách bằng dấu \|; không tính dòng trắng/header. |
-| `hour` | int | feature | hour | Giờ GMT+7 tại t, 0–23. |
-| `month` | int | feature | month | Tháng GMT+7 tại t, 1–12. |
-| `dayofweek` | int | feature | - | Thứ theo giờ GMT+7: thứ Hai=0, Chủ nhật=6. |
-| `season` | int | feature | - | Quy ước mùa cho Hà Nội: 0=đông (12–2), 1=xuân (3–5), 2=hạ (6–8), 3=thu (9–11); là quy ước lịch. |
-| `T2M_lag_1h` | float | feature | °C | T2M(t−1 giờ). |
-| `T2M_lag_24h` | float | feature | °C | T2M(t−24 giờ). |
-| `PRECTOTCORR_lag_1h` | float | feature | mm/hour | PRECTOTCORR(t−1 giờ). |
-| `PRECTOTCORR_lag_24h` | float | feature | mm/hour | PRECTOTCORR(t−24 giờ). |
-| `PS_diff_3h` | float | feature | kPa | PS(t) − PS(t−3 giờ); âm khi áp suất giảm. |
-| `T2M_rolling_mean_3h` | float | feature | °C | Trung bình T2M từ t−2 đến t, đủ 3 giờ, gồm giờ hiện tại. |
-| `T2M_rolling_mean_24h` | float | feature | °C | Trung bình T2M từ t−23 đến t, đủ 24 giờ, gồm giờ hiện tại. |
-| `PRECTOTCORR_rolling_sum_24h` | float | feature | mm | Tổng 24 giá trị mưa theo giờ từ t−23 đến t; mỗi khoảng kéo dài 1 giờ. |
-| `WD2M_sin` | float | feature | - | sin(WD2M(t) × π/180). |
-| `WD2M_cos` | float | feature | - | cos(WD2M(t) × π/180). |
-| `target_timestamp` | string | target_time | - | Thời điểm nhãn t+h giờ, GMT+7; h lấy từ metadata horizon_hours, mặc định 1. |
-| `target_temperature` | float | target | °C | T2M tại t+h, nhãn hồi quy nhiệt độ. |
-| `target_rainfall` | float | target | mm/hour | PRECTOTCORR tại t+h, nhãn hồi quy lượng mưa theo giờ; không phải tổng mưa trong h giờ. |
-| `rain_flag` | int | target | - | 1 nếu target_rainfall > 0.1 mm/hour, ngược lại 0. Là nhãn tương lai, không đưa vào X. |
+Cột ghi "z" đã được chuẩn hóa `(x − mean_train) / std_train`, tham số trong `scaler.json`. Đơn vị ở bảng dưới là đơn vị **trước** chuẩn hóa.
+
+## Khóa và phân tập
+
+| Trường | Ý nghĩa |
+|---|---|
+| `timestamp` | Thời điểm dự báo t, giờ Việt Nam `+07:00` |
+| `split` | `train` / `val` / `test`: mẫu hợp lệ. `none`: 47 giờ khởi động, 24 giờ purge cuối train và cuối val, 24 giờ cuối không có nhãn — giữ lại chỉ để cửa sổ LSTM nhìn lùi |
+
+## Đặc trưng theo giờ (LSTM/GRU và LR) — 13 cột
+
+| Trường | Đơn vị | Chuẩn hóa | Định nghĩa |
+|---|---|---|---|
+| `T2M` | °C | z | Nhiệt độ tại t |
+| `RH2M` | % | z | Độ ẩm tương đối tại t |
+| `DEWPOINT` | °C | z | Điểm sương (Magnus, a = 17,625, b = 243,04) từ T2M và RH2M |
+| `PS` | kPa | z | Áp suất bề mặt tại t |
+| `WS2M` | m/s | z | Tốc độ gió tại t |
+| `WIND_U` | m/s | z | −WS·sin(WD): thành phần gió hướng Đông (> 0 = đi về phía Đông) |
+| `WIND_V` | m/s | z | −WS·cos(WD): thành phần gió hướng Bắc (> 0 = đi về phía Bắc) |
+| `PRECTOTCORR_log1p` | log(mm/giờ) | z | log(1 + lượng mưa tại t) |
+| `ALLSKY_SFC_SW_DWN` | Wh/m² | z | Bức xạ sóng ngắn tại t |
+| `hour_sin`, `hour_cos` | — | không | sin/cos(2π·giờ/24), giờ GMT+7 |
+| `doy_sin`, `doy_cos` | — | không | sin/cos(2π·(ngày-trong-năm − 1 + giờ/24)/365,25) |
+
+## Đặc trưng lịch sử (chỉ cần cho LR) — 13 cột
+
+| Trường | Đơn vị | Chuẩn hóa | Định nghĩa |
+|---|---|---|---|
+| `T2M_lag_{1,2,3,6,12,24}h` | °C | z | T2M(t − k giờ) |
+| `T2M_roll_mean_24h` | °C | z | Trung bình T2M từ t−23 đến t |
+| `T2M_roll_min_24h`, `T2M_roll_max_24h` | °C | z | Thấp nhất / cao nhất T2M từ t−23 đến t |
+| `PS_diff_3h`, `PS_diff_24h` | kPa | z | PS(t) − PS(t−3h), PS(t) − PS(t−24h) |
+| `PRECTOTCORR_sum_24h_log1p` | log(mm) | z | log(1 + tổng mưa từ t−23 đến t) |
+| `ALLSKY_sum_24h` | Wh/m² | z | Tổng bức xạ từ t−23 đến t |
+
+## Nhãn — 4 cột (°C, không chuẩn hóa)
+
+| Trường | Định nghĩa |
+|---|---|
+| `T2M_t+1h` | T2M tại t + 1 giờ |
+| `T2M_t+6h` | T2M tại t + 6 giờ |
+| `T2M_t+12h` | T2M tại t + 12 giờ |
+| `T2M_t+24h` | T2M tại t + 24 giờ |
 
 ## Quy tắc sử dụng
 
-- Đặc trưng X chỉ gồm các trường có role=feature: 7 biến hiện tại và 14 đặc trưng mới (21 trường). Metadata lưu danh sách chính xác.
-- Nhãn y là target_temperature, target_rainfall hoặc rain_flag tùy bài toán. Không đưa nhãn, target_timestamp, mã định danh hoặc thông tin truy vết vào X.
-- Chỉ sử dụng dữ liệu tại hoặc trước t để tính X. Loại 24 dòng đầu vì thiếu lịch sử và h dòng cuối vì chưa có nhãn tương lai.
-- Loại mẫu nếu bất kỳ giờ nào trong [t−24,t] hoặc giờ nhãn t+h đã được điền/bổ sung, để tránh nội suy dùng tương lai và nhãn không phải quan trắc thật.
-- Giả định quan trắc giờ t đã có tại thời điểm phát dự báo. Đây là bộ đánh giá lịch sử; chưa mô phỏng độ trễ công bố thực tế của NASA.
-- Chia train/validation/test theo thời gian ở bước huấn luyện; bỏ các mẫu có target_timestamp chạm hoặc vượt thời điểm bắt đầu tập tiếp theo. Không chia ngẫu nhiên. Chưa tạo các tập này trong bước tạo đặc trưng.
-- Dữ liệu bão IBTrACS thuộc Sprint 4, chưa có nhãn hoặc đặc trưng bão trong bộ này.
+- Chỉ dùng dòng có `split` ∈ {train, val, test}. Không bao giờ đưa `split`, `timestamp` hay cột nhãn vào X.
+- Không chia ngẫu nhiên; không fit lại scaler trên val/test.
+- Dùng `src/preprocessing/sequences.py` để lấy X/y thay vì tự cắt, tránh lệch cửa sổ.
+- `scaler.json → __target__` chứa mean/std của T2M trên train để chuẩn hóa/đảo chuẩn hóa nhãn cho LSTM/GRU.

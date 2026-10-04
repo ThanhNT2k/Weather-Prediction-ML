@@ -1,49 +1,24 @@
-# Từ điển dữ liệu sạch NASA POWER — Hà Nội
+# Từ điển dữ liệu sạch — NASA POWER Hà Nội 2001–2025
 
-Các trường đặc trưng và nhãn ở tầng processed được định nghĩa đầy đủ trong [từ điển dữ liệu mô hình](processed_data_dictionary.md) và [schema JSON](data_schema.json). `rain_flag` ở processed là nhãn tại giờ tương lai, không phải cờ mưa ở giờ đầu vào.
+File: `data/cleaned/nasa_power/hanoi_hourly_20010101_20251231_clean.csv` (tạo bởi `python -m src.preprocessing.cleaning`). Mỗi dòng là một giờ Việt Nam (GMT+7) tại điểm lưới 21.0285°N, 105.8542°E. Khóa là `timestamp`; trục thời gian liên tục, không trùng. Quy tắc làm sạch và lý do: [README mục 5](../README.md#5-bước-2--làm-sạch-dữ-liệu). Các cột của dữ liệu mô hình: [processed_data_dictionary.md](processed_data_dictionary.md).
 
-Mỗi dòng là một giờ Việt Nam GMT+7 tại điểm đại diện Hà Nội (`21.0285`, `105.8542`). Khóa nghiệp vụ là `station_id + timestamp`. Dữ liệu sạch lưu tại `data/cleaned/nasa_power/`, dữ liệu thô được giữ nguyên.
-
-## Định danh và truy vết
-
-| Trường | Ý nghĩa |
-|---|---|
-| `record_id` | UUID v5 từ nguồn NASA POWER, tần suất hourly, station_id và timestamp UTC chuẩn hóa. Không đổi khi sắp xếp lại hoặc sửa giá trị khí tượng. |
-| `station_id` | `NASA_POWER_HANOI_21.0285_105.8542`; định danh điểm lấy dữ liệu, không phải mã trạm quan trắc vật lý. |
-| `timestamp` | Giờ Việt Nam GMT+7, dạng `2023-01-01T07:00:00+07:00`. |
-| `city` | `Hanoi`. |
-| `latitude`, `longitude` | Tọa độ điểm yêu cầu dữ liệu, đơn vị độ. |
-| `is_imputed` | 1 nếu có ít nhất một biến được điền; ngược lại 0. |
-| `imputed_columns` | Tên các biến được điền, ngăn bằng `\|`; `none` nếu không có. |
-| `is_inserted_hour` | 1 nếu bổ sung giờ thiếu vào trục thời gian; ngược lại 0. |
-| `source_row_numbers` | Số thứ tự bản ghi CSV nguồn, bắt đầu từ 1, không tính header và dòng trắng. Khi gộp trùng, liệt kê các số bằng `\|`; giờ bổ sung dùng `none`. |
-
-`record_id` là định danh, không phải feature đưa vào mô hình. Không dùng các cột truy vết làm đặc trưng mặc định.
-
-Thời gian được chuyển múi giờ thật sự: `2023-01-01T00:00:00Z` thành `2023-01-01T07:00:00+07:00`. Cùng thời điểm vẫn có cùng `record_id` do mã định danh luôn chuẩn hóa về UTC trước khi tính. Dữ liệu thô giữ UTC để truy vết NASA và ghép nguồn khác.
-
-Phạm vi dữ liệu sạch hiện tại là **01/01/2023 07:00 đến 01/01/2025 06:00 GMT+7**, đủ 17.544 giờ. Tên file vẫn dùng ngày nguồn UTC `20230101_20241231`; metadata ghi rõ `filename_date_basis`, `time_standard` và `timezone`. Đây là chuyển múi giờ của các quan trắc hiện có, không phải tải lại theo hai năm lịch địa phương.
-
-## Biến khí tượng
-
-| Trường | Đơn vị | Kiểm tra cơ bản |
+| Trường | Đơn vị | Ý nghĩa |
 |---|---|---|
-| `T2M` | °C | Không dưới -273,15 °C. |
-| `PRECTOTCORR` | mm/giờ | Không âm. |
-| `RH2M` | % | Từ 0 đến 100. |
-| `PS` | kPa | Lớn hơn 0. |
-| `WS2M` | m/s | Không âm. |
-| `WD2M` | độ | Đầu vào 0–360; chuẩn hóa 360 thành 0. |
-| `ALLSKY_SFC_SW_DWN` | Wh/m² | Không âm. |
+| `timestamp` | — | Giờ Việt Nam, ISO 8601 có `+07:00`, ví dụ `2001-01-01T07:00:00+07:00` |
+| `T2M` | °C | Nhiệt độ không khí ở 2 m |
+| `PRECTOTCORR` | mm/giờ | Lượng mưa đã hiệu chỉnh |
+| `RH2M` | % | Độ ẩm tương đối ở 2 m |
+| `PS` | kPa | Áp suất bề mặt |
+| `WS2M` | m/s | Tốc độ gió ở 2 m |
+| `WD2M` | độ | Hướng gió thổi đến từ, [0, 360), 0 = Bắc; 360 đã đổi thành 0 |
+| `ALLSKY_SFC_SW_DWN` | Wh/m² | Bức xạ sóng ngắn xuống bề mặt |
+| `is_inserted_hour` | 0/1 | 1 nếu giờ này không có trong file nguồn và được chèn vào trục thời gian |
+| `is_imputed` | 0/1 | 1 nếu ít nhất một biến của giờ này được nội suy (khoảng thiếu ≤ 3 giờ) |
+| `imputed_columns` | — | Tên các biến được nội suy, ngăn bằng `\|`; `none` nếu không có |
+| `outlier_flags` | — | Tên các biến bị gắn cờ ngoại lệ thống kê ở giờ này; `none` nếu không có. **Giá trị vẫn giữ nguyên** |
 
-Chuỗi rỗng, số không đọc được, NaN/Infinity, `-999` và fill value trong metadata nguồn được coi là thiếu. Nội suy tuyến tính cho các biến thông thường; hướng gió nội suy theo cung ngắn nhất. Điền biên bằng giá trị hợp lệ gần nhất; báo lỗi nếu cả cột thiếu. Các giới hạn trên chỉ bắt lỗi vật lý cơ bản, không xác nhận toàn bộ độ chính xác khí tượng.
+Giá trị trống trong các cột khí tượng chỉ xuất hiện khi khoảng thiếu dài hơn 3 giờ (hiện tại: không có).
 
-## Metadata của tập dữ liệu
+`*_outlier_flags.csv`: một dòng cho mỗi ô bị gắn cờ — `timestamp`, `variable`, `value`, `robust_z` (trống với quy tắc không dùng z), `rule` (`seasonal_robust_z>5`, `wet_hour_q99.9>…`, `hourly_jump>8C`).
 
-- `dataset_id`: `sha256:<hash>` của nội dung CSV sạch; thay đổi khi nội dung file thay đổi.
-- `source_file`, `source_sha256`, `source_metadata_sha256`: truy vết CSV và metadata nguồn.
-- `cleaning_version`: phiên bản quy tắc làm sạch.
-- Báo cáo số dòng đầu vào/đầu ra, dòng trùng đã loại, giờ bổ sung, ô được điền theo từng biến và ngưỡng số dòng quan trắc.
-- `parameters`: metadata đơn vị từ nguồn NASA khi có file metadata đi kèm.
-
-Dữ liệu sau điền là dữ liệu hồi cứu. Để đánh giá dự báo, chia theo thời gian trước và chỉ dùng thông tin sẵn có tại thời điểm dự báo; không dùng các ô được điền làm nhãn đánh giá. Bộ 2023–2024 hiện không có ô cần điền.
+`*.metadata.json`: thống kê trước/sau làm sạch, số ô bị xử lý ở từng bước, hash SHA-256 của CSV và đường dẫn log (`outputs/logs/data/`). Bản sao: [outputs/reports/cleaning_report.json](../outputs/reports/cleaning_report.json).

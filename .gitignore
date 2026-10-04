@@ -9,3 +9,4 @@ venv/
 .venv/
 
 reports/
+!outputs/reports/
