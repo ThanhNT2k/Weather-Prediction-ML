@@ -1,0 +1,12 @@
+﻿,dtype,missing,missing_pct,unique
+timestamp,str,0,0.0,219144
+city,str,0,0.0,1
+latitude,float64,0,0.0,1
+longitude,float64,0,0.0,1
+T2M,float64,0,0.0,3691
+PRECTOTCORR,float64,0,0.0,746
+RH2M,float64,0,0.0,6825
+PS,float64,0,0.0,504
+WS2M,float64,0,0.0,774
+WD2M,float64,0,0.0,3595
+ALLSKY_SFC_SW_DWN,float64,0,0.0,31922

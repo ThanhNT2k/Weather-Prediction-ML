@@ -1,0 +1,68 @@
+{
+  "source_zip": "Weather-Prediction-ML(2).zip",
+  "raw_sha256": "5af4c1a2d36dce8babac95e695d126b07605d61cd3e178b447e1496c0ce36ad8",
+  "input_rows": 219144,
+  "expected_hours": 219144,
+  "unique_hours": 219144,
+  "duplicate_timestamps": 0,
+  "missing_hours": 0,
+  "outside_metadata": 0,
+  "sorted_in_source": true,
+  "local_start": "2001-01-01 07:00:00+07:00",
+  "local_end": "2026-01-01 06:00:00+07:00",
+  "invalid_cells": {
+    "T2M": 0,
+    "PRECTOTCORR": 0,
+    "RH2M": 0,
+    "PS": 0,
+    "WS2M": 0,
+    "WD2M": 0,
+    "ALLSKY_SFC_SW_DWN": 0
+  },
+  "imputed_rows": 0,
+  "remaining_missing_cells": 0,
+  "unique_flagged_cells": 20289,
+  "events": 4399,
+  "level_shift_candidates": 134,
+  "automatic_statistical_deletions": 0,
+  "generated_at": "2026-10-04T03:49:26.925552+00:00",
+  "cleaned_sha256": "8e53549c38acd64faade253af124ed695b4f71c8cddecea0793cd3f2b06197b3",
+  "timezone": "UTC+07:00",
+  "parameters": {
+    "T2M": {
+      "units": "C",
+      "longname": "Temperature at 2 Meters"
+    },
+    "PRECTOTCORR": {
+      "units": "mm/hour",
+      "longname": "Precipitation Corrected"
+    },
+    "RH2M": {
+      "units": "%",
+      "longname": "Relative Humidity at 2 Meters"
+    },
+    "PS": {
+      "units": "kPa",
+      "longname": "Surface Pressure"
+    },
+    "WS2M": {
+      "units": "m/s",
+      "longname": "Wind Speed at 2 Meters"
+    },
+    "WD2M": {
+      "units": "Degrees",
+      "longname": "Wind Direction at 2 Meters"
+    },
+    "ALLSKY_SFC_SW_DWN": {
+      "units": "Wh/m^2",
+      "longname": "All Sky Surface Shortwave Downward Irradiance"
+    }
+  },
+  "fill_short_gaps": false,
+  "max_fill_hours": 2,
+  "pandas": "3.0.6",
+  "numpy": "2.5.3",
+  "python": "3.12.10",
+  "policy": "Keep statistical extremes; retain unresolved NaN; optional past-only ffill T2M/RH2M/PS <=2h.",
+  "eda_only": "Seasonal thresholds and retrospective diagnostics use the whole dataset; refit on train for modeling."
+}
