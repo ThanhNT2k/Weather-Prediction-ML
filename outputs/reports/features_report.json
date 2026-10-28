@@ -1,7 +1,7 @@
 {
   "version": "2.0",
-  "generated_at": "2026-10-04T13:37:00.145879+00:00",
-  "source": "E:\\AI projects\\weather-prediction-ML\\Weather-Prediction-ML\\data\\cleaned\\nasa_power\\hanoi_hourly_20010101_20251231_clean.csv",
+  "generated_at": "2026-10-27T22:20:14.462018+00:00",
+  "source": "D:\\Coding\\Weather-Prediction-ML\\data\\cleaned\\nasa_power\\hanoi_hourly_20010101_20251231_clean.csv",
   "sha256": "9c9b4807e02689ffad1b17a92671d0c12541f883321e3ecd9253ae8282236bb4",
   "timezone": "Asia/Ho_Chi_Minh",
   "rows": 219144,

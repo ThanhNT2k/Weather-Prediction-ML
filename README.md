@@ -1,6 +1,6 @@
 # Dự báo nhiệt độ Hà Nội trong 1h, 6h, 12h, 24h tới — Xử lý dữ liệu
 
-> Đồ án môn **Khoa học Dữ liệu**. Tài liệu này trình bày toàn bộ quy trình biến dữ liệu khí tượng thô theo giờ thành dữ liệu **đã chuẩn hóa, sẵn sàng đưa vào mô hình** (Linear Regression, LSTM, GRU). Mỗi thao tác đều ghi rõ **làm gì – vì sao – kết quả**. Phần mô hình chưa triển khai.
+> Đồ án môn **Khoa học Dữ liệu**. Tài liệu này trình bày quy trình biến dữ liệu khí tượng thô theo giờ thành dữ liệu đã chuẩn hóa và huấn luyện **LightGBM** để dự báo nhiệt độ. Mỗi thao tác đều ghi rõ làm gì – vì sao – kết quả.
 
 | Hạng mục | Giá trị |
 |---|---|
@@ -10,7 +10,8 @@
 | Thiếu / trùng / lỗi | 0 giờ thiếu · 0 dòng trùng · 0 ô lỗi (đã kiểm tra, xem mục 4) |
 | Bài toán | Hồi quy nhiều đầu ra: `T2M` tại t+1h, t+6h, t+12h, t+24h |
 | Mẫu sau xử lý | train **157.698** · val **26.280** · test **35.047** |
-| Đặc trưng | 13 đặc trưng theo giờ cho LSTM/GRU (cửa sổ 48h) · 26 đặc trưng dạng bảng cho Linear Regression |
+| Mô hình đã huấn luyện | 4 LightGBM Regressor riêng cho t+1h, t+6h, t+12h, t+24h |
+| Đặc trưng mô hình | 26 đặc trưng dạng bảng, bao gồm khí tượng hiện tại, thời gian và lịch sử |
 
 ---
 
@@ -71,6 +72,12 @@ python -m src.preprocessing.features
 python -m src.visualization.plots
 ```
 
+Huấn luyện mô hình nhiệt độ (sau khi đã có `model_ready.csv`):
+
+```bash
+python -m src.training.train_temperature
+```
+
 (Tùy chọn) tải lại dữ liệu gốc từ NASA trước bước 1: `python -m src.data_collection.nasa_power --start 2001-01-01 --end 2025-12-31`.
 
 | Bước | Đầu ra | Ghi chú |
@@ -79,6 +86,8 @@ python -m src.visualization.plots
 | Đặc trưng | `data/processed/nasa_power/hanoi_t2m_model_ready.csv`, `scaler.json`, `.metadata.json` | 219.144 dòng × 32 cột |
 | Biểu đồ | [outputs/figures/](outputs/figures/) | 13 file PNG |
 | Báo cáo | [outputs/reports/](outputs/reports/) (`cleaning_report.json`, `features_report.json`, `scaler.json`, `descriptive_statistics.csv`) | bản nhỏ, lưu trong Git |
+| Mô hình nhiệt độ | `models/temperature_lightgbm/` | 4 file LightGBM native `.txt` |
+| Đánh giá nhiệt độ | `outputs/reports/temperature_lightgbm_metrics.{csv,json}` | MAE/RMSE validation, test và baseline |
 
 `data/` bị `.gitignore` bỏ qua vì dung lượng lớn; chạy 3 lệnh trên để tạo lại (≈1 phút).
 
@@ -420,7 +429,62 @@ X_seq, y_seq, t = make_sequences(df, "train", scale_target=True)  # (157698, 48,
 - Với `scale_target=True`, đổi dự đoán về °C bằng `pred * std + mean` (lấy từ `target_scaler()`).
 - Bộ nhớ: tập train dạng cửa sổ chiếm ~390 MB (float32). Nếu máy yếu, tạo cửa sổ theo batch hoặc dùng `torch.utils.data.Dataset` đọc từ cùng bảng.
 
-## 11. Cấu trúc thư mục
+## 11. Huấn luyện và đánh giá mô hình nhiệt độ
+
+Code: [src/training/train_temperature.py](src/training/train_temperature.py). Mỗi horizon dùng một `LightGBM Regressor` riêng trên cùng 26 đặc trưng; cách này cho phép số vòng lặp tối ưu theo độ khó của từng horizon.
+
+- Train: 2001–2018; validation: 2019–2021 chỉ dùng cho early stopping (MAE); test: 2022–2025 chỉ mở đúng một lần để báo cáo kết quả.
+- Cấu hình đã chạy: seed 42, learning rate 0,05, tối đa 300 cây, `num_leaves=31`, regularization L2 = 1. Số cây thực dùng được chọn bằng early stopping với patience 100.
+- Baseline `persistence` dự báo `T2M(t+h) = T2M(t)`; đây là mốc tối thiểu hợp lý cho chuỗi nhiệt độ.
+- Mô hình và báo cáo sẽ được ghi đè có chủ ý khi chạy lại. Có thể đổi thư mục hoặc tham số, ví dụ: `python -m src.training.train_temperature --n-estimators 500 --model-dir models/experiment_500`.
+
+Kết quả test tái lập từ lần chạy hiện tại (35.047 mẫu, đơn vị °C):
+
+| Horizon | Cây chọn | MAE | RMSE | Accuracy ±1°C | Accuracy ±2°C |
+|---|---:|---:|---:|---:|---:|
+| t+1h | 300 | 0,179 | 0,249 | 99,62% | 99,99% |
+| t+6h | 300 | 0,644 | 0,897 | 79,67% | 96,17% |
+| t+12h | 300 | 0,899 | 1,264 | 67,32% | 90,22% |
+| t+24h | 284 | 1,176 | 1,676 | 56,95% | 83,26% |
+
+Các chỉ số chi tiết (cả validation) nằm trong [outputs/reports/temperature_lightgbm_metrics.csv](outputs/reports/temperature_lightgbm_metrics.csv) và [temperature_lightgbm_metrics.json](outputs/reports/temperature_lightgbm_metrics.json). Kết quả phù hợp EDA: t+12h khó nhất do ở nửa chu kỳ ngày đêm đối diện, còn t+24h có baseline mạnh vì cùng giờ của ngày kế tiếp.
+
+### Chạy thử một dự báo
+
+Sau khi huấn luyện, chạy [src/training/predict_temperature.py](src/training/predict_temperature.py) với một thời điểm có trong bảng `model_ready`. Lệnh dùng đúng 26 đặc trưng tại thời điểm gốc `t`, nạp 4 mô hình đã lưu và in nhiệt độ dự báo. Vì đây là backtest, nếu `T2M_t+h` đã có trong bảng thì lệnh cũng in nhiệt độ thực tế và sai số tuyệt đối.
+
+```bash
+python -m src.training.predict_temperature --timestamp 2024-09-07T12:00:00+07:00
+```
+
+Lần chạy thử trên ngày bão Yagi cho kết quả sau (°C):
+
+| Horizon | Dự báo | Thực tế | Sai số tuyệt đối |
+|---|---:|---:|---:|
+| t+1h | 26,898 | 27,350 | 0,452 |
+| t+6h | 25,685 | 27,050 | 1,365 |
+| t+12h | 25,533 | 26,250 | 0,717 |
+| t+24h | 27,406 | 30,900 | 3,494 |
+
+Không truyền `--timestamp` sẽ chọn hàng gần nhất còn đủ cả bốn nhãn để chạy demo. Timestamp không có timezone được hiểu là giờ Hà Nội (GMT+7).
+
+### Kiểm tra accuracy
+
+Vì đây là **hồi quy nhiệt độ**, không dùng accuracy dạng phần trăm (chỉ phù hợp phân loại). Độ chính xác được đánh giá bằng:
+
+- **MAE (°C):** sai số tuyệt đối trung bình; càng thấp càng tốt và dễ diễn giải.
+- **RMSE (°C):** phạt mạnh sai số lớn; càng thấp càng tốt.
+- **Accuracy ±1°C / ±2°C (%):** tỷ lệ dự báo có sai số tuyệt đối không quá 1°C / 2°C. Đây là quy ước theo ngưỡng được ghi rõ, không phải accuracy phân loại.
+
+Lệnh huấn luyện tự tính cả hai trên validation và tập test chưa từng dùng để fit/chọn mô hình; đồng thời so sánh với baseline. Để xác minh code và các phép tính không bị hỏng, chạy:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Hiện có 35 unit test, gồm kiểm thử riêng cho khôi phục T2M từ z-score của baseline, MAE/RMSE, accuracy theo ngưỡng (kể cả biên ngưỡng và đầu vào lỗi), xử lý timestamp, chọn hàng demo và thông báo model bị thiếu.
+
+## 12. Cấu trúc thư mục
 
 ```text
 Weather-Prediction-ML/
@@ -442,11 +506,13 @@ Weather-Prediction-ML/
 │   │   ├── features.py           # bước 4–6
 │   │   └── sequences.py          # đọc dữ liệu cho LR / LSTM / GRU
 │   ├── visualization/plots.py    # 13 biểu đồ
-│   └── training/                 # (chưa triển khai) mô hình
+│   └── training/                 # huấn luyện mô hình
+│       └── train_temperature.py  # 4 LightGBM dự báo T2M
+│       └── predict_temperature.py # chạy thử một dự báo đã lưu
 └── tests/                        # unit test cho từng quy tắc xử lý
 ```
 
-## 12. Kiểm thử
+## 13. Kiểm thử
 
 ```bash
 python -m unittest discover -s tests -v
@@ -454,7 +520,7 @@ python -m unittest discover -s tests -v
 
 Các test tạo dữ liệu giả có lỗi cố ý và kiểm tra: đổi múi giờ; từ chối timestamp không có múi giờ; `-999`/ngoài miền → NaN; nội suy chỉ khoảng ≤ 3h; chèn giờ thiếu; hướng gió nội suy qua 0° (không phải 180°); trùng lặp xung đột bị chặn; ngoại lệ được giữ; nhãn đúng t+h; đặc trưng không phụ thuộc tương lai; vector gió đúng quy ước; split đúng thứ tự và có purge; giờ được điền loại mọi cửa sổ chạm vào nó; scaler chỉ fit trên train; cửa sổ LSTM khớp đúng dữ liệu gốc.
 
-## 13. Hạn chế
+## 14. Hạn chế
 
 - Một điểm lưới đại diện cho cả Hà Nội; dữ liệu tái phân tích mượt hơn quan trắc trạm thực tế.
 - Giả định dữ liệu giờ t có sẵn ngay tại t. Thực tế NASA POWER công bố trễ vài ngày → đây là đánh giá hồi cứu (backtest), chưa phải hệ thống dự báo thời gian thực.
